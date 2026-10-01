@@ -280,3 +280,56 @@ def _run_xml(text: str, fmt: dict, mono: bool = False) -> str:
     rpr += '<w:rFonts w:cs="monospace"/>' if mono else ""
     rpr = f"<w:rPr>{rpr}</w:rPr>" if rpr else ""
     return f"<w:r>{rpr}<w:t>{escape(text)}</w:t></w:r>"
+
+
+# --- cells (used by the web editor) -------------------------------------------
+
+def to_cells(doc: Document) -> list[dict]:
+    """The document as editor cells: text (one paragraph), code, section, or an opaque block."""
+    cells: list[dict] = []
+    for i, b in enumerate(doc.blocks):
+        if b.kind == "code":
+            cells.append({"kind": "code", "code": b.code, "first_line": b.first_line})
+        elif b.kind == "sectionbreak":
+            cells.append({"kind": "section"})
+        else:
+            md = paragraph_markdown(b)
+            if md is None:
+                cells.append({"kind": "block", "index": i, "label": _block_label(b)})
+            else:
+                cells.append({"kind": "text", "md": ("- " + md) if b.style == "ListParagraph" else md})
+    return cells
+
+
+def _block_label(b: Block) -> str:
+    if "Table of Contents" in b.raw:
+        return "Table of contents"
+    text = "".join(t.text or "" for t in b.element.iter(W + "t")).strip()
+    return (text[:60] + "…") if len(text) > 60 else (text or "Formatted block")
+
+
+def cells_to_text(cells: list[dict]) -> str:
+    """Inverse of to_cells, in plain-text live format (feed to from_text with the original as base)."""
+    out: list[str] = []
+    for i, c in enumerate(cells):
+        kind = c.get("kind")
+        if kind == "code":
+            code = c.get("code", "")
+            out.extend(CODE_ESCAPE + l if _MARKUP_LINE.match(l) else l for l in code.split("\n"))
+        elif kind == "section":
+            out.append("%%")
+        elif kind == "block":
+            out.append(f"%[text:mlxkit:block:{int(c['index'])}]")
+        elif kind == "text":
+            # Each line of a text cell is its own paragraph.
+            paras = c.get("md", "").split("\n")
+            if len(paras) > 1:
+                paras = [p for p in paras if p.strip()] or [""]
+            for j, md in enumerate(paras):
+                if md.startswith("- "):
+                    nxt = paras[j + 1] if j + 1 < len(paras) else (
+                        (cells[i + 1].get("md", "").split("\n")[0] if i + 1 < len(cells) and cells[i + 1].get("kind") == "text" else ""))
+                    if not nxt.startswith("- "):
+                        md += " \\"
+                out.append("%[text] " + md)
+    return "\n".join(out) + "\n" + APPENDIX

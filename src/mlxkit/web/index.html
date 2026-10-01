@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlxkit</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/octave/octave.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1d2330; --muted: #677084; --border: #dfe3ea; --hover: #eef1f6;
+  --accent: #2563eb; --accent-fg: #ffffff; --code-bg: #f8f9fb; --out-bg: #fbfcfd;
+  --warn: #9a6700; --warn-bg: #fff8e5; --err: #c4232f; --err-bg: #fdecee; --ok: #1a7f37;
+  --cm-kw: #8b2bb9; --cm-str: #0a7d36; --cm-num: #b35900; --cm-com: #6b7385; --cm-builtin: #1f5fc2;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1218; --panel: #161b23; --fg: #e3e7ee; --muted: #929bad; --border: #2a313d; --hover: #1d2430;
+    --accent: #5b8cff; --accent-fg: #0b0e14; --code-bg: #12171f; --out-bg: #131921;
+    --warn: #e3b341; --warn-bg: #2b2412; --err: #ff7b85; --err-bg: #2c1519; --ok: #4ac26b;
+    --cm-kw: #d29cff; --cm-str: #7ee2a8; --cm-num: #ffb86c; --cm-com: #7d869a; --cm-builtin: #82b1ff;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1218; --panel: #161b23; --fg: #e3e7ee; --muted: #929bad; --border: #2a313d; --hover: #1d2430;
+  --accent: #5b8cff; --accent-fg: #0b0e14; --code-bg: #12171f; --out-bg: #131921;
+  --warn: #e3b341; --warn-bg: #2b2412; --err: #ff7b85; --err-bg: #2c1519; --ok: #4ac26b;
+  --cm-kw: #d29cff; --cm-str: #7ee2a8; --cm-num: #ffb86c; --cm-com: #7d869a; --cm-builtin: #82b1ff;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+button { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 260px 1fr; grid-template-rows: 52px 1fr; height: 100vh; }
+header { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--border); min-width: 0; }
+.brand { font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+.brand span { color: var(--muted); font-weight: 450; }
+.doc-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.doc-title b { color: var(--fg); font-weight: 600; }
+.btn { border: 1px solid var(--border); background: var(--panel); border-radius: 7px; padding: 5px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.btn:hover:not(:disabled) { background: var(--hover); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+.btn .kbd { font-size: 11px; opacity: .75; }
+.icon-btn { border: 0; background: transparent; cursor: pointer; padding: 4px 6px; border-radius: 6px; color: var(--muted); }
+.icon-btn:hover { background: var(--hover); color: var(--fg); }
+aside { border-right: 1px solid var(--border); background: var(--panel); overflow: auto; display: flex; flex-direction: column; min-height: 0; }
+.filter { margin: 10px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); font: inherit; }
+.files { list-style: none; margin: 0; padding: 0 6px 12px; }
+.files li { padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files li small { color: var(--muted); }
+.files li:hover { background: var(--hover); }
+.files li.active { background: var(--accent); color: var(--accent-fg); }
+.files li.active small { color: inherit; opacity: .8; }
+main { overflow: auto; min-width: 0; }
+.notebook { max-width: 920px; margin: 0 auto; padding: 22px 20px 120px; }
+.empty { color: var(--muted); text-align: center; margin-top: 18vh; }
+.banner { border-radius: 8px; padding: 10px 14px; margin: 0 0 14px; font-size: 14px; }
+.banner.err { background: var(--err-bg); color: var(--err); }
+.banner.warn { background: var(--warn-bg); color: var(--warn); }
+.banner.info { background: var(--panel); border: 1px solid var(--border); }
+.banner details { margin-top: 6px; color: var(--fg); }
+.banner pre { max-height: 300px; overflow: auto; font-size: 12px; }
+.progress { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.status { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.status.dirty { color: var(--warn); }
+.status.ok { color: var(--ok); }
+
+.cell { position: relative; margin: 2px 0; border-radius: 8px; border: 1px solid transparent; }
+.cell:hover { border-color: var(--border); }
+.cell.focused { border-color: var(--accent); }
+.cell-tools { position: absolute; right: 6px; top: -13px; display: none; gap: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 1px; box-shadow: var(--shadow); z-index: 3; }
+.cell:hover .cell-tools, .cell.focused .cell-tools { display: flex; }
+.cell-tools button { font-size: 12px; }
+.text-cell .rendered { padding: 4px 12px; min-height: 1.5em; cursor: text; }
+.text-cell .rendered:empty::before { content: "Empty paragraph — click to write"; color: var(--muted); font-style: italic; }
+.text-cell .rendered h1 { font-size: 1.85em; margin: .3em 0 .2em; letter-spacing: -.015em; }
+.text-cell .rendered h2 { font-size: 1.35em; margin: .7em 0 .2em; }
+.text-cell .rendered h3 { font-size: 1.12em; margin: .6em 0 .2em; }
+.text-cell .rendered p { margin: .35em 0; }
+.text-cell .rendered ul { margin: .2em 0; padding-left: 1.4em; }
+.text-cell .rendered img { max-width: 100%; height: auto; }
+.text-cell .rendered code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+.text-cell textarea { width: 100%; border: 0; background: var(--code-bg); color: var(--fg); font: 13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px 12px; border-radius: 8px; resize: none; outline: none; overflow: hidden; }
+.hint { font-size: 12px; color: var(--muted); padding: 2px 12px 6px; }
+.code-cell { background: var(--panel); border-color: var(--border); box-shadow: var(--shadow); margin: 10px 0; overflow: hidden; }
+.code-cell:hover { border-color: var(--border); }
+.code-cell.focused { border-color: var(--accent); }
+.code-cell .CodeMirror { height: auto; background: var(--code-bg); color: var(--fg); font: 13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: 8px 8px 0 0; }
+.code-cell .CodeMirror-gutters { background: var(--code-bg); border-right: 1px solid var(--border); }
+.code-cell .CodeMirror-linenumber { color: var(--muted); opacity: .7; }
+.code-cell .CodeMirror-cursor { border-left-color: var(--fg); }
+.code-cell .CodeMirror-selected, .code-cell .CodeMirror-focused .CodeMirror-selected { background: rgba(91,140,255,.22); }
+.code-cell .CodeMirror-matchingbracket { color: var(--accent) !important; text-decoration: underline; }
+.cm-s-default .cm-keyword { color: var(--cm-kw); } .cm-s-default .cm-string { color: var(--cm-str); }
+.cm-s-default .cm-number { color: var(--cm-num); } .cm-s-default .cm-comment { color: var(--cm-com); font-style: italic; }
+.cm-s-default .cm-builtin { color: var(--cm-builtin); } .cm-s-default .cm-variable, .cm-s-default .cm-operator { color: var(--fg); }
+.cm-s-default .cm-atom { color: var(--cm-num); } .cm-s-default .cm-bracket { color: var(--muted); }
+.outputs { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 4px 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+.outputs.stale { opacity: .45; }
+.outputs.stale::before { content: "Outdated — code changed since this ran"; display: block; font-size: 12px; color: var(--warn); padding: 6px 14px 0; }
+.out { padding: 8px 14px; background: var(--out-bg); }
+.out + .out { border-top: 1px dashed var(--border); }
+.out pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.out img { max-width: 100%; height: auto; background: #fff; border-radius: 4px; display: block; }
+.out.warning pre { color: var(--warn); }
+.out.error { background: var(--err-bg); } .out.error pre { color: var(--err); }
+.out .var b { color: var(--muted); font-weight: 600; }
+.section-cell { padding: 8px 0; }
+.section-cell .rule { border-top: 2px dashed var(--border); position: relative; }
+.section-cell .rule span { position: absolute; left: 50%; transform: translate(-50%, -55%); background: var(--bg); padding: 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.block-cell .chip { margin: 4px 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 7px; font-size: 13px; color: var(--muted); }
+.inserter { height: 14px; position: relative; display: flex; justify-content: center; align-items: center; opacity: 0; transition: opacity .12s; }
+.inserter:hover, .inserter:focus-within { opacity: 1; }
+.inserter::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--accent); opacity: .5; }
+.inserter button { position: relative; font-size: 12px; padding: 0 8px; margin: 0 3px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; cursor: pointer; color: var(--muted); }
+.inserter button:hover { color: var(--accent); border-color: var(--accent); }
+.katex-display { margin: .5em 0; }
+.eq-display { text-align: center; }
+.menu-toggle { display: none; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  aside { position: fixed; top: 52px; bottom: 0; left: 0; width: 82vw; max-width: 300px; z-index: 10; transform: translateX(-105%); transition: transform .2s; box-shadow: var(--shadow); }
+  aside.open { transform: none; }
+  .menu-toggle { display: inline-flex; }
+  .brand span, .btn .kbd, .hide-sm { display: none; }
+  .notebook { padding: 16px 16px 100px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <button class="icon-btn menu-toggle" id="menuBtn" aria-label="Files">☰</button>
+    <div class="brand">mlxkit <span>· live scripts in Octave</span></div>
+    <div class="doc-title" id="docTitle"></div>
+    <span class="status" id="status"></span>
+    <button class="btn hide-sm" id="themeBtn" title="Toggle theme">◐</button>
+    <button class="btn" id="saveBtn" disabled>Save <span class="kbd">⌘S</span></button>
+    <button class="btn primary" id="runBtn" disabled>▶ Run <span class="kbd">⌘⏎</span></button>
+  </header>
+  <aside id="sidebar">
+    <input class="filter" id="filter" placeholder="Filter files…" aria-label="Filter files">
+    <ul class="files" id="files"></ul>
+  </aside>
+  <main id="main">
+    <div class="notebook" id="nb"><div class="empty">Pick a live script on the left.</div></div>
+  </main>
+</div>
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const state = { files: [], path: null, doc: null, cells: [], dirty: false, job: null, banners: [] };
+
+// ---------- theme ----------
+try { const t = localStorage.getItem("mlxkit-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("#themeBtn").onclick = () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("mlxkit-theme", next); } catch (e) {}
+};
+$("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
+
+// ---------- api ----------
+async function api(method, url, body) {
+  const res = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const err = new Error(data.error || res.statusText); err.status = res.status; throw err; }
+  return data;
+}
+
+// ---------- files ----------
+async function loadFiles() {
+  const data = await api("GET", "/api/files");
+  state.files = data.files;
+  renderFiles();
+}
+function renderFiles() {
+  const q = $("#filter").value.toLowerCase();
+  const ul = $("#files"); ul.innerHTML = "";
+  for (const f of state.files) {
+    if (q && !f.path.toLowerCase().includes(q)) continue;
+    const li = document.createElement("li");
+    const parts = f.path.split("/"); const name = parts.pop();
+    li.innerHTML = `${esc(name)}${parts.length ? ` <small>${esc(parts.join("/"))}</small>` : ""}`;
+    li.title = f.path;
+    if (f.path === state.path) li.classList.add("active");
+    li.onclick = () => { $("#sidebar").classList.remove("open"); openFile(f.path); };
+    ul.appendChild(li);
+  }
+  if (!ul.children.length) ul.innerHTML = `<li style="cursor:default;color:var(--muted)">No .mlx files here</li>`;
+}
+$("#filter").oninput = renderFiles;
+
+async function openFile(path) {
+  if (state.dirty && path !== state.path && !confirm("Discard unsaved changes?")) return;
+  location.hash = encodeURIComponent(path);
+  state.banners = [];
+  try { setDoc(await api("GET", "/api/doc?path=" + encodeURIComponent(path))); }
+  catch (e) { showError(e.message); }
+}
+window.addEventListener("hashchange", () => {
+  const p = decodeURIComponent(location.hash.slice(1));
+  if (p && p !== state.path) openFile(p);
+});
+
+function setDoc(doc) {
+  const keepScroll = state.path === doc.path ? $("#main").scrollTop : 0;
+  state.doc = doc; state.path = doc.path;
+  state.cells = doc.cells.map(c => ({ ...c, stale: false }));
+  state.dirty = false;
+  render(); renderFiles(); updateStatus();
+  $("#main").scrollTop = keepScroll;
+}
+
+// ---------- rendering ----------
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function math(el) { if (window.renderMathInElement) renderMathInElement(el, { delimiters: [{ left: "\\[", right: "\\]", display: true }, { left: "\\(", right: "\\)", display: false }], throwOnError: false }); }
+
+function render() {
+  const nb = $("#nb"); const top = $("#main").scrollTop; nb.innerHTML = "";
+  for (const b of state.banners) nb.appendChild(b);
+  if (!state.doc) return;
+  $("#docTitle").innerHTML = `<b>${esc(state.doc.path.split("/").pop())}</b>`;
+  nb.appendChild(inserter(0));
+  let lineNo = 1;
+  state.cells.forEach((c, i) => {
+    let el;
+    if (c.kind === "code") { el = codeCell(c, i, lineNo); lineNo += c.code.split("\n").length; }
+    else if (c.kind === "text") el = textCell(c, i);
+    else if (c.kind === "section") el = simpleCell(c, i, `<div class="rule"><span>section break</span></div>`, "section-cell");
+    else el = simpleCell(c, i, `<div class="chip">🔒 ${esc(c.label)} <span style="opacity:.7">— kept as is</span></div>`, "block-cell");
+    nb.appendChild(el);
+    nb.appendChild(inserter(i + 1));
+  });
+  math(nb);
+  for (const c of state.cells) if (c.cm) c.cm.refresh();
+  $("#main").scrollTop = top;
+}
+
+function tools(i) {
+  const t = document.createElement("div"); t.className = "cell-tools";
+  const add = (label, title, fn) => { const b = document.createElement("button"); b.className = "icon-btn"; b.textContent = label; b.title = title; b.onclick = e => { e.stopPropagation(); fn(); }; t.appendChild(b); };
+  add("↑", "Move up", () => move(i, -1));
+  add("↓", "Move down", () => move(i, 1));
+  add("✕", "Delete", () => { state.cells.splice(i, 1); markDirty(); render(); });
+  return t;
+}
+function inserter(at) {
+  const d = document.createElement("div"); d.className = "inserter";
+  for (const [label, kind] of [["+ Text", "text"], ["+ Code", "code"], ["+ Section", "section"]]) {
+    const b = document.createElement("button"); b.textContent = label;
+    b.onclick = () => insert(at, kind);
+    d.appendChild(b);
+  }
+  return d;
+}
+function insert(at, kind) {
+  const c = kind === "code" ? { kind, code: "", outputs: [] } : kind === "text" ? { kind, md: "", html: "", editing: true } : { kind };
+  state.cells.splice(at, 0, c); markDirty(); render();
+  if (c.cm) c.cm.focus();
+  const ta = document.querySelector(`[data-cell="${at}"] textarea`); if (ta) ta.focus();
+}
+function move(i, d) {
+  const j = i + d; if (j < 0 || j >= state.cells.length) return;
+  [state.cells[i], state.cells[j]] = [state.cells[j], state.cells[i]]; markDirty(); render();
+}
+function simpleCell(c, i, inner, cls) {
+  const el = document.createElement("div"); el.className = `cell ${cls}`; el.dataset.cell = i;
+  el.innerHTML = inner; el.appendChild(tools(i)); return el;
+}
+
+function textCell(c, i) {
+  const el = document.createElement("div"); el.className = "cell text-cell"; el.dataset.cell = i;
+  el.appendChild(tools(i));
+  if (c.editing) {
+    const ta = document.createElement("textarea"); ta.value = c.md; ta.rows = 1; ta.spellcheck = true;
+    const grow = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+    ta.oninput = () => { c.md = ta.value; markDirty(); grow(); };
+    ta.onkeydown = e => { if (e.key === "Escape" || (e.key === "Enter" && e.shiftKey)) { e.preventDefault(); ta.blur(); } };
+    ta.onblur = () => finishText(c);
+    el.appendChild(ta);
+    const h = document.createElement("div"); h.className = "hint";
+    h.textContent = "Markdown: # Title, ## Heading, **bold**, *italic*, `code`, $math$, - list item. One line = one paragraph. Esc to finish.";
+    el.appendChild(h);
+    requestAnimationFrame(grow);
+  } else {
+    const r = document.createElement("div"); r.className = "rendered"; r.innerHTML = c.html || "";
+    r.onclick = e => { if (e.target.closest("a")) return; c.editing = true; render(); const t = document.querySelector(`[data-cell="${i}"] textarea`); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } };
+    el.appendChild(r);
+  }
+  return el;
+}
+async function finishText(c) {
+  c.editing = false;
+  try { c.html = (await api("POST", "/api/render", { path: state.path, md: c.md })).html; } catch (e) { c.html = esc(c.md); }
+  render();
+}
+
+function codeCell(c, i, firstLine) {
+  const el = document.createElement("div"); el.className = "cell code-cell"; el.dataset.cell = i;
+  el.appendChild(tools(i));
+  const host = document.createElement("div"); el.appendChild(host);
+  const cm = CodeMirror(host, {
+    value: c.code, mode: "octave", lineNumbers: true, firstLineNumber: firstLine, matchBrackets: true,
+    indentUnit: 4, viewportMargin: Infinity, lineWrapping: false,
+    extraKeys: { "Cmd-/": "toggleComment", "Ctrl-/": "toggleComment", Tab: cm => cm.somethingSelected() ? cm.indentSelection("add") : cm.replaceSelection("    ") },
+  });
+  c.cm = cm;
+  // Outputs appear right under the line that produced them, like the Live Editor.
+  const widgets = [];
+  for (const o of (c.outputs || []).slice().sort((a, b) => a.line - b.line)) {
+    const wrap = document.createElement("div"); wrap.className = "outputs" + (c.stale ? " stale" : "");
+    wrap.innerHTML = o.html;
+    const line = Math.min(o.line, cm.lineCount() - 1);
+    widgets.push(cm.addLineWidget(line, wrap, { coverGutter: true, noHScroll: true }));
+    wrap.querySelectorAll("img").forEach(img => img.addEventListener("load", () => cm.refresh()));
+  }
+  cm.on("change", () => {
+    c.code = cm.getValue();
+    if (!c.stale) { c.stale = true; widgets.forEach(w => w.node.classList.add("stale")); }
+    markDirty();
+  });
+  cm.on("focus", () => el.classList.add("focused"));
+  cm.on("blur", () => el.classList.remove("focused"));
+  return el;
+}
+
+// ---------- status / banners ----------
+function markDirty() { if (!state.dirty) { state.dirty = true; updateStatus(); } }
+function updateStatus(text, cls) {
+  const s = $("#status");
+  const running = state.job && state.job.state === "running";
+  if (text) { s.textContent = text; s.className = "status " + (cls || ""); }
+  else if (running) { s.textContent = "Running…"; s.className = "status"; }
+  else if (state.dirty) { s.textContent = "● Unsaved"; s.className = "status dirty"; }
+  else if (state.doc) { s.textContent = "Saved"; s.className = "status ok"; }
+  else s.textContent = "";
+  $("#saveBtn").disabled = !state.doc || !state.dirty || running;
+  const rb = $("#runBtn");
+  rb.disabled = !state.doc;
+  rb.innerHTML = running ? "■ Stop" : `▶ Run <span class="kbd">⌘⏎</span>`;
+  rb.classList.toggle("primary", true);
+}
+function banner(cls, html) {
+  const d = document.createElement("div"); d.className = "banner " + cls; d.innerHTML = html;
+  state.banners.push(d); render(); return d;
+}
+function showError(msg) { banner("err", esc(msg)); }
+
+// ---------- save / run ----------
+function payloadCells() { return state.cells.map(({ kind, md, code, index }) => ({ kind, md, code, index })); }
+async function save() {
+  if (!state.doc || !state.dirty) return true;
+  updateStatus("Saving…");
+  try {
+    const doc = await api("POST", "/api/save", { path: state.path, mtime: state.doc.mtime, cells: payloadCells() });
+    state.banners = state.banners.filter(b => !b.classList.contains("err"));
+    setDoc(doc);
+    updateStatus("Saved", "ok");
+    return true;
+  } catch (e) {
+    if (e.status === 409) {
+      const b = banner("err", `${esc(e.message)} <button class="btn" style="margin-left:8px">Reload</button>`);
+      b.querySelector("button").onclick = () => { state.dirty = false; openFile(state.path); };
+    } else showError("Save failed: " + e.message);
+    updateStatus();
+    return false;
+  }
+}
+async function run() {
+  if (!state.doc) return;
+  if (state.job && state.job.state === "running") { await api("POST", "/api/cancel", { id: state.job.id }); return; }
+  if (state.dirty && !(await save())) return;
+  state.banners = [];
+  const b = banner("info", `<b>Running in Octave…</b> <span class="prog-text"></span><div class="progress"><div></div></div>`);
+  try {
+    const { id } = await api("POST", "/api/run", { path: state.path });
+    state.job = { id, state: "running" }; updateStatus();
+    while (true) {
+      await new Promise(r => setTimeout(r, 500));
+      const j = await api("GET", "/api/job?id=" + id);
+      state.job = j;
+      if (j.total) { b.querySelector(".progress > div").style.width = (100 * j.done / j.total) + "%"; b.querySelector(".prog-text").textContent = `statement ${Math.min(j.done + 1, j.total)} of ${j.total}`; }
+      if (j.state !== "running") break;
+    }
+    const j = state.job;
+    state.banners = [];
+    const doc = await api("GET", "/api/doc?path=" + encodeURIComponent(state.path));
+    setDoc(doc);
+    if (j.state === "cancelled") banner("warn", "Run stopped. The file was not changed.");
+    else if (j.state === "failed") banner("err", `Run failed: ${esc(j.error)}<details><summary>Details</summary><pre>${esc(j.log)}</pre></details>`);
+    else {
+      const notes = j.notes.length ? `<details><summary>${j.notes.length} compatibility note(s)</summary><pre>${esc(j.notes.join("\n"))}</pre></details>` : "";
+      const log = `<details><summary>Octave log</summary><pre>${esc(j.log || "(empty)")}</pre></details>`;
+      if (j.error) banner("err", `Stopped at an error: <b>${esc(j.error)}</b> — see the red output below.${notes}${log}`);
+      else banner("info", `<span style="color:var(--ok)">✓ Ran successfully</span> — outputs saved into the .mlx.${notes}${log}`);
+      const firstErr = document.querySelector(".out.error");
+      if (firstErr) firstErr.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  } catch (e) { state.banners = []; showError("Run failed: " + e.message); }
+  state.job = null; updateStatus();
+}
+$("#saveBtn").onclick = save;
+$("#runBtn").onclick = run;
+document.addEventListener("keydown", e => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === "s") { e.preventDefault(); save(); }
+  if (mod && e.key === "Enter") { e.preventDefault(); document.activeElement && document.activeElement.blur && document.activeElement.tagName === "TEXTAREA" && document.activeElement.blur(); run(); }
+});
+window.addEventListener("beforeunload", e => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------- start ----------
+(async () => {
+  await loadFiles();
+  const p = decodeURIComponent(location.hash.slice(1));
+  if (p) openFile(p); else if (state.files.length === 1) openFile(state.files[0].path);
+})();
+</script>
+</body>
+</html>

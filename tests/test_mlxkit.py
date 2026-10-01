@@ -188,3 +188,28 @@ def test_handle_indexed_assignment():
     out = transform("s = scatter(1, 2);\ns.XData(end+1) = 3;").split("\n")[1]
     assert out == ("mlxkit_tmp_ = get(s, 'XData'); mlxkit_tmp_(end+1) = 3; "
                    "mlxkit_set(s, 'XData', mlxkit_tmp_); clear mlxkit_tmp_;")
+
+
+def test_server_save_roundtrip(tmp_path):
+    from mlxkit.server import App, Conflict
+
+    shutil.copy(FIXTURE, tmp_path / "k.mlx")
+    app = App(tmp_path)
+    assert [f["path"] for f in app.files()] == ["k.mlx"]
+    doc = app.doc("k.mlx")
+    figure_cells = [c for c in doc["cells"] if c["kind"] == "code" and c["outputs"]]
+    assert figure_cells, "saved outputs are attached to code cells"
+    # Saving unchanged cells leaves the file byte-identical.
+    before = (tmp_path / "k.mlx").read_bytes()
+    app.save("k.mlx", doc["mtime"], doc["cells"])
+    assert (tmp_path / "k.mlx").read_bytes() == before
+    # An edit changes only that paragraph.
+    cells = doc["cells"]
+    cells[1]["md"] = "*by someone else*"
+    new = app.save("k.mlx", app.doc("k.mlx")["mtime"], cells)
+    assert new["cells"][1]["md"] == "*by someone else*"
+    # Stale mtime is rejected; paths outside the root are refused.
+    with pytest.raises(Conflict):
+        app.save("k.mlx", 1.0, cells)
+    with pytest.raises(PermissionError):
+        app.doc("../etc/passwd.mlx")

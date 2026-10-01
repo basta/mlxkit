@@ -5,6 +5,7 @@
   mlx run    script.mlx            run in GNU Octave and embed outputs (figures, text)
   mlx html   script.mlx            render script + outputs to script.html for viewing
   mlx show   script.mlx            print the plain-text version to the terminal
+  mlx serve  [folder|file.mlx]     open a notebook editor in the browser
 """
 from __future__ import annotations
 
@@ -119,6 +120,15 @@ def cmd_show(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    from .server import serve
+
+    target = Path(args.target).resolve()
+    root, file = (target.parent, target.name) if target.suffix.lower() == ".mlx" else (target, None)
+    serve(root, port=args.port, octave=args.octave, open_browser=not args.no_browser, file=file)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mlx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -152,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("show", help="print a .mlx as plain text")
     s.add_argument("file")
     s.set_defaults(func=cmd_show)
+
+    v = sub.add_parser("serve", help="open a notebook editor in the browser")
+    v.add_argument("target", nargs="?", default=".", help="folder to serve, or one .mlx file")
+    v.add_argument("--port", type=int, default=8765)
+    v.add_argument("--octave", default="octave", help="Octave executable")
+    v.add_argument("--no-browser", action="store_true", help="don't open a browser window")
+    v.set_defaults(func=cmd_serve)
 
     args = p.parse_args(argv)
     return args.func(args)

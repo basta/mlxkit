@@ -3,6 +3,7 @@
 Edit and run MATLAB live scripts (`.mlx`) without MATLAB, using GNU Octave.
 
 ```
+mlx serve  [folder]          # notebook editor in the browser: edit, run, see outputs inline
 mlx edit   script.mlx        # -> script.live.m, a plain-text version you can edit anywhere
 mlx build  script.live.m     # apply your edits back into script.mlx
 mlx run    script.mlx        # run it in Octave; figures and output are embedded in the .mlx
@@ -11,6 +12,16 @@ mlx show   script.mlx        # print the plain-text version
 ```
 
 `build` and `run` overwrite the `.mlx` in place and keep the previous version as `script.mlx.bak`.
+
+## The editor
+
+`mlx serve` opens `http://127.0.0.1:8765` with every `.mlx` under the folder in
+a sidebar. Click a paragraph to edit it as Markdown; code cells have MATLAB
+syntax highlighting. **⌘S** saves into the `.mlx` (keeping a `.bak`), **⌘⏎**
+saves and runs the whole script in Octave with a progress bar and a Stop button.
+Figures and printed output appear right under the line that produced them, and
+are dimmed as outdated once you edit that code. The server only listens on
+localhost and only touches `.mlx` files inside the folder you gave it.
 
 ## Install
 

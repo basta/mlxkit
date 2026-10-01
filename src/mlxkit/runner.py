@@ -5,6 +5,8 @@ import importlib.util
 import os
 import re
 import sys
+import threading
+import time
 import shutil
 import struct
 import subprocess
@@ -53,8 +55,17 @@ def split_local_functions(lines: list[str | None], regions: list[Region]) -> dic
     return funcs
 
 
+class Cancelled(Exception):
+    pass
+
+
 def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout: float | None = 1800,
-        keep_workdir: bool = False, log=lambda msg: None) -> RunResult:
+        keep_workdir: bool = False, log=lambda msg: None, progress=lambda done, total: None,
+        cancel: threading.Event | None = None) -> RunResult:
+    """Run a live script in Octave and write it, with outputs, to mlx_out.
+
+    progress(done, total) is called as regions finish; setting `cancel` stops Octave.
+    """
     mlx_in = Path(mlx_in).resolve()
     pkg = MlxPackage.read(mlx_in)
     doc = Document(pkg.document_xml)
@@ -87,9 +98,8 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
                   "warning('off', 'Octave:LaTeX:internal-error'); "
                   f"mlxkit_run('{_q(out)}', [{nums}]);")
         log(f"running {len(executable)} regions in Octave...")
-        proc = subprocess.run([octave, "--no-gui", "--quiet", "--norc", "--no-history", "--eval", script],
-                              cwd=work, capture_output=True, text=True, timeout=timeout, env=_octave_env())
-        result.octave_log = proc.stdout + proc.stderr
+        result.octave_log = _run_octave([octave, "--no-gui", "--quiet", "--norc", "--no-history", "--eval", script],
+                                        work, out, len(executable), timeout, progress, cancel)
         result.outputs, result.error = _collect(regions, executable, out)
     finally:
         if keep_workdir:
@@ -103,6 +113,31 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
     pkg.output_xml = build_output_xml(regions, result.outputs, code_line_numbers(lines), layout)
     pkg.write(mlx_out)
     return result
+
+
+def _run_octave(cmd, cwd, out: Path, total: int, timeout, progress, cancel) -> str:
+    log_file = out.parent / "octave.log"
+    with open(log_file, "w") as log:
+        proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=_octave_env())
+        start, done = time.monotonic(), -1
+        try:
+            while proc.poll() is None:
+                if cancel is not None and cancel.wait(0.25):
+                    raise Cancelled()
+                if cancel is None:
+                    time.sleep(0.25)
+                if timeout and time.monotonic() - start > timeout:
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                now = sum(1 for _ in out.glob("*.figs"))
+                if now != done:
+                    done = now
+                    progress(done, total)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+    progress(total, total)
+    return log_file.read_text(errors="replace")
 
 
 def _octave_env() -> dict[str, str]:
