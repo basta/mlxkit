@@ -131,3 +131,10 @@ uv run python tools/corpus_check.py CORPUS_DIR      # regions vs. MATLAB's saved
 uv run python tools/roundtrip_check.py CORPUS_DIR   # .mlx -> text -> .mlx
 uv run python tools/compat_survey.py out.json *.mlx # how far real scripts get in Octave
 ```
+
+## License
+
+MIT (see `LICENSE`). The test fixture `tests/fixtures/OpAmpLabSoln.mlx` is
+© The MathWorks, Inc., under the BSD 3-Clause license in `tests/fixtures/LICENSE-MathWorks.md`.
+mlxkit is not affiliated with or endorsed by The MathWorks, Inc.; MATLAB is a
+registered trademark of The MathWorks, Inc.
