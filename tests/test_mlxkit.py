@@ -113,12 +113,18 @@ def test_run_in_octave(tmp_path):
 
     src = tmp_path / "script.mlx"
     pkg, doc = load()
-    doc = from_text("%[text] # Test\nx = 6*7\ndisp('hello')\nplot(1:3)\nwarning('careful')\n", doc)
+    doc = from_text("%[text] # Test\nx = 6*7\ndisp('hello')\nplot(1:3)\nwarning('careful')\n"
+                    "M = [1 2; 3 4]\nname = 'Ada'\ns.a = 1;\ns\n", doc)
     pkg.document_xml = doc.to_xml()
     pkg.write(src)
     result = run(src, tmp_path / "out.mlx")
     kinds = [(o.kind, o.text) for o in result.outputs if o.kind != "figure"]
     assert ("variable", "42") in kinds
+    assert ("variable", "'Ada'") in kinds
+    matrix = next(o for o in result.outputs if o.kind == "matrix")
+    assert (matrix.name, matrix.rows, matrix.columns) == ("M", 2, 2)
+    struct = next(o for o in result.outputs if o.kind == "variableString")
+    assert struct.header == "struct with fields:" and "a: 1" in struct.text
     assert ("text", "hello\n") in kinds
     assert ("warning", "Warning: careful") in kinds
     assert any(o.kind == "figure" and o.png.startswith(b"\x89PNG") for o in result.outputs)

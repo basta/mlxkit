@@ -44,7 +44,20 @@ function mlxkit_setup_compat(gendir)
     '    if any(keep(2:end)), builtin(''set'', args{keep}); end\n' ...
     '  end\n' ...
     'end\n']));
+  % Load every installed Octave package (statistics, symbolic, datatypes, ...)
+  % since MATLAB toolboxes are available without an explicit load.
+  try
+    pkgs = pkg('list');
+    for i = 1:numel(pkgs)
+      try
+        pkg('load', pkgs{i}.name);
+      catch
+      end
+    end
+  catch
+  end
   addpath(gendir);
+  addpath(fullfile(fileparts(mfilename('fullpath')), 'compat'));
 end
 
 function t = shim_template()

@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import matcompat
+from . import display, matcompat
 from .document import Document
 from .outputs import Output, build_output_xml, code_line_numbers
 from .package import MlxPackage
@@ -64,7 +64,7 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
     for d in (work, fndir, out):
         d.mkdir()
     try:
-        _prepare_workdir(mlx_in.parent, work, result.notes)
+        extra_path = _prepare_workdir(mlx_in.parent, work, result.notes)
         for name, src in split_local_functions(lines, regions).items():
             (fndir / f"{name}.m").write_text(src)
         executable = [r for r in regions if not r.is_function]
@@ -74,7 +74,9 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
 
         nums = " ".join(str(r.number) for r in executable)
         script = (f"addpath('{_q(OCTAVE_SUPPORT)}'); mlxkit_setup_compat('{_q(tmp / 'compat')}'); "
-                  f"addpath('{_q(fndir)}'); "
+                  + "".join(f"addpath('{_q(p)}', '-end'); " for p in extra_path[1:])
+                  + (f"addpath('{_q(extra_path[0])}'); " if extra_path else "")
+                  + f"addpath('{_q(fndir)}'); mlxkit_project_root('{_q(find_project_root(mlx_in.parent) or mlx_in.parent)}'); "
                   "graphics_toolkit('qt'); set(0, 'defaultfigurevisible', 'off'); more off; "
                   "warning('off', 'Octave:latex-markup-not-supported-for-tick-marks'); "
                   "warning('off', 'Octave:LaTeX:internal-error'); "
@@ -98,14 +100,47 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
     return result
 
 
-def _prepare_workdir(src: Path, work: Path, notes: list[str]) -> None:
-    """Mirror the script's folder into the work directory, converting .mat files Octave can't read."""
-    for entry in src.iterdir():
+def find_project_root(folder: Path) -> Path | None:
+    """The enclosing MATLAB project (a folder with a .prj file), if any."""
+    for d in [folder, *folder.parents][:6]:
+        if any(d.glob("*.prj")):
+            return d
+    return None
+
+
+def _prepare_workdir(src: Path, work: Path, notes: list[str]) -> list[Path]:
+    """Mirror the script's folder (or its MATLAB project) into the work directory.
+
+    Returns extra folders to put on the Octave path. Inside a MATLAB project,
+    MATLAB starts in the project root with every project folder on the path,
+    so we do the same.
+    """
+    root = find_project_root(src) or src
+    if root != src:
+        notes.append(f"MATLAB project at {root}: running from its root with all project folders on the path")
+    converted = work.parent / "converted"
+    converted.mkdir(exist_ok=True)
+    for entry in root.iterdir():
         target = work / entry.name
         if entry.suffix.lower() == ".mat" and matcompat.needs_conversion(entry):
             notes += matcompat.convert(entry, target)
         else:
             target.symlink_to(entry)
+    if root == src:
+        return []
+    # .mat files elsewhere in the project: converted copies go first on the path.
+    for mat in root.rglob("*.mat"):
+        if ".git" in mat.parts or mat.parent == root or mat.stat().st_size > 200_000_000:
+            continue
+        if matcompat.needs_conversion(mat) and not (converted / mat.name).exists():
+            notes += matcompat.convert(mat, converted / mat.name)
+    folders = [d for d in [root, *root.rglob("*")] if d.is_dir() and _on_project_path(d, root)]
+    return [converted, *folders]
+
+
+def _on_project_path(d: Path, root: Path) -> bool:
+    parts = d.relative_to(root).parts
+    return not any(p.startswith((".", "+", "@")) or p in ("private", "resources", "__pycache__") for p in parts)
 
 
 _WARNING = re.compile(r"^warning: (.*)$")
@@ -142,9 +177,10 @@ def _collect(regions: list[Region], executable: list[Region], out: Path) -> tupl
             break  # not reached: an earlier region failed
         text = txt_file.read_text(errors="replace")
         body, warnings = _split_warnings(text)
-        body_text = "".join(body).strip("\n")
-        if body_text.strip():
-            pending.append((r.number, len(pending), _text_output(r.number, body_text)))
+        vars_file = out / f"{r.number}.vars"
+        variables = display.parse_vars(vars_file.read_text()) if vars_file.exists() else {}
+        for o in display.convert("".join(body), r.number, variables):
+            pending.append((r.number, len(pending), o))
         for w in warnings:
             pending.append((r.number, len(pending), Output("warning", [r.number], text=f"Warning: {w}")))
         figs = (out / f"{r.number}.figs").read_text().split()
@@ -163,17 +199,6 @@ def _collect(regions: list[Region], executable: list[Region], out: Path) -> tupl
             pending.append((regs[0], len(pending), Output("figure", regs, png=data, size=(w, h))))
     pending.sort(key=lambda p: (p[0], p[1]))
     return [p[2] for p in pending], error
-
-
-_VAR_SCALAR = re.compile(r"^(\w+) = (\S.*)$")
-
-
-def _text_output(region: int, text: str) -> Output:
-    """Octave prints `x = 5`; MATLAB live scripts show that as a variable output."""
-    m = _VAR_SCALAR.match(text)
-    if m and "\n" not in text:
-        return Output("variable", [region], name=m.group(1), text=m.group(2))
-    return Output("text", [region], text=text + "\n")
 
 
 def _q(path) -> str:
