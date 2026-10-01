@@ -10,7 +10,33 @@ from mlxkit.outputs import Output, build_output_xml, code_line_numbers
 from mlxkit.package import MlxPackage
 from mlxkit.regions import split_regions
 
+# A live script saved by MATLAB, with outputs (BSD-licensed, see fixtures/README.md).
 FIXTURE = Path(__file__).parent / "fixtures" / "OpAmpLabSoln.mlx"
+
+# A script with local functions, as MATLAB requires them: after all other code.
+WITH_FUNCTIONS = """%[text] # Projectile
+v0 = 20;
+y = height(v0, 1)
+%%
+%[text] ## Helpers
+%[text] Local functions live at the end of a live script.
+function y = height(v, t)
+    y = v*t - 9.81*t^2/2; % your code goes here
+end
+function g = gravity()
+    g = 9.81;
+end
+"""
+
+
+def make_script(path, text=WITH_FUNCTIONS):
+    """A new .mlx written by mlxkit from plain-text live code."""
+    from mlxkit.package import new_package
+
+    pkg = new_package()
+    pkg.document_xml = from_text(text, Document(pkg.document_xml)).to_xml()
+    pkg.write(path)
+    return path
 
 
 def load():
@@ -73,16 +99,28 @@ def test_livetext_roundtrip():
 def test_livetext_edit_code_and_text():
     _, doc = load()
     text = to_text(doc)
-    text = text.replace("    beta = 0; % todo", "    beta = atan(lr*tan(df)/(lf+lr));")
-    text = text.replace("%[text] ## Introduction", "%[text] ## Intro **edited**")
+    text = text.replace("R1_part1 = 2 % Replace NaN with your answer in kOhm", "R1_part1 = 2.5 % edited")
+    text = text.replace("%[text] # Operational Amplifiers Lab", "%[text] # Op Amps **edited**")
     new = from_text(text, doc)
     code = "\n".join(b.code for b in new.code_blocks)
-    assert "beta = atan(lr*tan(df)/(lf+lr));" in code
+    assert "R1_part1 = 2.5 % edited" in code
     assert len(new.blocks) == len(doc.blocks)
-    edited = [b for b in new.blocks if "Intro" in b.raw][0]
-    assert edited.style == "heading" and "<w:b/>" in edited.raw
+    edited = [b for b in new.blocks if "Op Amps" in b.raw][0]
+    assert edited.style == "title" and "<w:b/>" in edited.raw
     # Untouched paragraphs keep their original XML, including the image.
     assert sum(b.raw == o.raw for b, o in zip(new.blocks, doc.blocks)) == len(doc.blocks) - 2
+
+
+def test_local_function_regions_follow_matlab():
+    # How MATLAB R2021a split a script ending in local functions: the first
+    # function's header and body statements are regions, then everything from
+    # its `end` to the last line is one region.
+    lines = ["a = 1;", "function y = f(x)", "  % comment", "  y = 2*x;", "end",
+             "function z = g()", "  z = 3;", "end"]
+    regions = split_regions(lines)
+    assert [(r.start_line, r.end_line, r.is_function) for r in regions] == [
+        (0, 0, False), (1, 1, True), (3, 3, True), (4, 7, True)]
+    assert regions[0].section_break and regions[-1].end_of_section
 
 
 def test_classic_section_titles_become_headings():
@@ -96,14 +134,14 @@ def test_output_xml_links_outputs_to_regions():
     _, doc = load()
     regions = regions_of(doc)
     lines = doc.lines()
-    out = build_output_xml(regions, [Output("text", [65], text="hi\n")], code_line_numbers(lines))
+    out = build_output_xml(regions, [Output("text", [1], text="hi\n")], code_line_numbers(lines))
     root = ET.fromstring(out)
     element = root.find("outputArray")[0]
     assert element.find("type").text == "text"
-    region = root.find("regionArray")[65]
+    region = root.find("regionArray")[1]
     assert [i.text for i in region.find("outputIndexes")] == ["0"]
     # lineNumbers count code lines only, 1-based.
-    expected = code_line_numbers(lines)[regions[65].start_line]
+    expected = code_line_numbers(lines)[regions[1].start_line]
     assert [int(x.text) for x in element.find("lineNumbers")] == [expected]
 
 
@@ -220,16 +258,16 @@ def test_outputs_survive_unrelated_edits():
     from mlxkit.outputs import parse_output_xml
 
     pkg, doc = load()
-    text = to_text(doc).replace("lr = 1420; % m", "lr = 1420; % m\nwheelbase = lf + lr;")
+    first = "R1_part1 = 2 % Replace NaN with your answer in kOhm"
+    text = to_text(doc).replace(first, first + "\nscale = 1;")
     new = from_text(text, doc)
     outs = parse_output_xml(carry_outputs(pkg.output_xml, doc, new))
-    # All five outputs belong to statements that didn't change; they shift by one region.
-    assert [o.kind for o in outs] == ["figure", "figure", "figure", "text", "text"]
-    assert outs[3].regions == [66]
+    # All four outputs belong to statements that didn't change; later ones shift by one region.
+    assert [(o.kind, o.regions[0]) for o in outs] == [("variable", 0), ("variable", 2), ("figure", 8), ("figure", 19)]
     # Editing a plotting statement drops only the figure it fed.
-    text2 = to_text(doc).replace("title('Path'", "title('Path'")
+    text2 = to_text(doc).replace("ylim([-10 10])", "ylim([-5 5])")
     outs2 = parse_output_xml(carry_outputs(pkg.output_xml, doc, from_text(text2, doc)))
-    assert [o.kind for o in outs2] == ["figure", "figure", "text", "text"]
+    assert [o.kind for o in outs2] == ["variable", "variable", "figure"]
 
 
 def test_merge_outputs_replaces_only_what_ran():
@@ -250,10 +288,9 @@ def test_select_regions_by_section():
     _, doc = load()
     _, regions, _ = parse_script(doc)
     first_code = next(i for i, b in enumerate(doc.blocks) if b.kind == "code")
-    assert select_regions(doc, regions, "section", first_code) == [0, 1]
-    upto = select_regions(doc, regions, "upto", first_code)
-    assert upto == [0, 1]
-    assert len(select_regions(doc, regions, "all", None)) == 68
+    assert select_regions(doc, regions, "section", first_code) == list(range(11))
+    assert select_regions(doc, regions, "upto", first_code) == [0]
+    assert len(select_regions(doc, regions, "all", None)) == 21
 
 
 @pytest.mark.skipif(shutil.which("octave") is None, reason="GNU Octave not installed")
@@ -290,10 +327,10 @@ def test_notebook_roundtrip(tmp_path):
 
     nb = nbformat.reads(nbformat.writes(to_notebook(FIXTURE)), as_version=4)
     nbformat.validate(nb)
-    # Local functions come first so the notebook runs top to bottom.
-    assert nb.cells[1].cell_type == "code" and nb.cells[1].source.startswith("function beta")
     md = "\n".join(c.source for c in nb.cells if c.cell_type == "markdown")
-    assert "$l_{\\rm f}$" in md and "attachment:rId1.png" in md  # plain TeX, image attached
+    assert "$$V_{out} = - 4V_{in} + 0.02 \\frac{dV_{in}}{dt}$$" in md  # plain TeX in the notebook
+    with_image = next(c for c in nb.cells if "attachment:rId1.png" in c.source)
+    assert "rId1.png" in with_image.attachments  # images travel as cell attachments
     out = tmp_path / "back.mlx"
     from_notebook(nb, FIXTURE, out)
     pkg, back = MlxPackage.read(FIXTURE), MlxPackage.read(out)
@@ -306,19 +343,36 @@ def test_notebook_edits_flow_back(tmp_path):
     nbformat = pytest.importorskip("nbformat")
     from mlxkit.notebook import from_notebook, to_notebook
 
-    nb = to_notebook(FIXTURE)
+    src = make_script(tmp_path / "proj.mlx")
+    nb = to_notebook(src)
+    # Local functions come first so the notebook runs top to bottom.
     fn = nb.cells[1]
-    fn.source = fn.source.replace("beta = 0; % todo", "beta = atan(lr*tan(df)/(lf + lr));")
-    intro = next(c for c in nb.cells if c.cell_type == "markdown" and "## Introduction" in c.source)
-    intro.source = intro.source.replace("## Introduction", "## Introduction (edited) with $\\alpha^2$")
+    assert fn.cell_type == "code" and fn.source.startswith("function y = height")
+    fn.source = fn.source.replace("y = v*t - 9.81*t^2/2; % your code goes here", "y = v*t - gravity()*t^2/2;")
+    heading = next(c for c in nb.cells if c.cell_type == "markdown" and "## Helpers" in c.source)
+    heading.source = heading.source.replace("## Helpers", "## Helpers (edited) with $\\alpha^2$")
     out = tmp_path / "edited.mlx"
-    from_notebook(nb, FIXTURE, out)
+    from_notebook(nb, src, out)
     doc = Document(MlxPackage.read(out).document_xml)
-    assert "beta = atan(lr*tan(df)/(lf + lr));" in doc.script()
-    # Functions are back at the end of the script, after the test code.
-    assert doc.script().index("run_tests(") < doc.script().index("function beta")
-    heading = next(b for b in doc.blocks if "edited" in b.raw)
-    assert heading.style == "heading" and "\\alpha^2" in heading.raw
+    assert "y = v*t - gravity()*t^2/2;" in doc.script()
+    # Functions are back at the end of the script, after the code that uses them.
+    assert doc.script().index("y = height(v0, 1)") < doc.script().index("function y = height")
+    edited = next(b for b in doc.blocks if "edited" in b.raw)
+    assert edited.style == "heading" and "\\alpha^2" in edited.raw
+
+
+def test_new_function_cells_move_to_the_end(tmp_path):
+    nbformat = pytest.importorskip("nbformat")
+    from mlxkit.notebook import from_notebook
+
+    nb = nbformat.v4.new_notebook(cells=[
+        nbformat.v4.new_code_cell("function y = twice(x)\n  y = 2*x;\nend"),
+        nbformat.v4.new_markdown_cell("Use it:"),
+        nbformat.v4.new_code_cell("twice(21)"),
+    ])
+    from_notebook(nb, None, tmp_path / "new.mlx")  # no base: a brand-new live script
+    script = Document(MlxPackage.read(tmp_path / "new.mlx").document_xml).script()
+    assert script.index("twice(21)") < script.index("function y = twice")
 
 
 @pytest.mark.skipif(shutil.which("octave") is None, reason="GNU Octave not installed")

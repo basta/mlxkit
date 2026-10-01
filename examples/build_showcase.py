@@ -42,8 +42,8 @@ name = 'Octave'
 M = magic(4)
 mask = M > 8"""),
     code("""car.model = 'sedan';
-car.lf = 2.7;
-car.lr = 1420;
+car.mass = 1420;
+car.wheelbase = 2.7;
 car
 parts = {'wheel', 4, [1 2 3]}"""),
 
