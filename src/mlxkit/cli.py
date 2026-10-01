@@ -78,10 +78,11 @@ def cmd_build(args) -> int:
 
         base_path = Path(args.base) if args.base else src.with_suffix(".mlx")
         out = Path(args.output) if args.output else base_path
-        if out == base_path:
+        new = not base_path.exists()
+        if out == base_path and not new:
             _backup(out)
-        n = from_notebook(nbformat.read(src, as_version=4), base_path, out)
-        print(f"wrote {out} ({n} output{'s' if n != 1 else ''} from the notebook)")
+        n = from_notebook(nbformat.read(src, as_version=4), None if new else base_path, out)
+        print(f"wrote {'new ' if new else ''}{out} ({n} output{'s' if n != 1 else ''} from the notebook)")
         return 0
     base_path = Path(args.base) if args.base else _mlx_path(src)
     out = Path(args.output) if args.output else base_path

@@ -36,10 +36,12 @@ function ok = mlxkit_region(k, code, outdir)
 end
 
 function s = describe_displayed(txt)
-  % class and size of every variable the region displayed (`name = ...`).
-  s = '';
+  % JSON list of {name, class, size, matlab} for every variable the region
+  % displayed (`name = ...`); `matlab` is MATLAB's display of the value.
+  s = '[]';
   names = regexp(txt, '(?m)^(\w+) =', 'tokens');
   seen = {};
+  info = {};
   for i = 1:numel(names)
     n = names{i}{1};
     if any(strcmp(seen, n)), continue; end
@@ -49,8 +51,15 @@ function s = describe_displayed(txt)
     catch
       continue;
     end
-    sz = size(v);
-    s = [s sprintf('%s\t%s\t%s\t%d\n', n, class(v), strjoin(arrayfun(@num2str, sz, 'UniformOutput', false), 'x'), isreal(v))];
+    try
+      shown = mlxkit_matlab_display(v);
+    catch
+      shown = '';
+    end
+    info{end+1} = struct('name', n, 'class', class(v), 'size', size(v), 'matlab', shown);
+  end
+  if ~isempty(info)
+    s = jsonencode(info);
   end
 end
 

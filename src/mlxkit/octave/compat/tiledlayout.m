@@ -1,4 +1,4 @@
-function t = tiledlayout(varargin)
+function varargout = tiledlayout(varargin)
   % mlxkit compat: minimal tiledlayout on top of subplot. Supports
   % tiledlayout(m, n), tiledlayout('flow') and name/value options (ignored).
   global MLXKIT_TILES
@@ -17,5 +17,7 @@ function t = tiledlayout(varargin)
   f = gcf();
   clf(f);
   MLXKIT_TILES = struct('fig', f, 'm', m, 'n', n, 'k', 0, 'flow', flow);
-  t = struct('Figure', f);
+  if nargout > 0
+    varargout{1} = struct('Figure', f);
+  end
 end

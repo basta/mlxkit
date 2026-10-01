@@ -21,10 +21,20 @@ _BLOCK = re.compile(r"^(\w+) =$")
 class VarInfo:
     cls: str
     size: tuple[int, ...]
+    matlab: str = ""  # MATLAB's display of the value, when Octave could produce it
 
 
 def parse_vars(text: str) -> dict[str, VarInfo]:
+    import json
+
     out = {}
+    if text.lstrip().startswith("["):
+        items = json.loads(text)
+        for it in items if isinstance(items, list) else [items]:
+            size = it.get("size", [1, 1])
+            size = tuple(int(x) for x in (size if isinstance(size, list) else [size]))
+            out[it["name"]] = VarInfo(it.get("class", ""), size, it.get("matlab") or "")
+        return out
     for line in text.splitlines():
         parts = line.split("\t")
         if len(parts) >= 3:
@@ -70,7 +80,9 @@ def convert(text: str, region: int, vars: dict[str, VarInfo]) -> list[Output]:
 
 
 def _scalar_output(name: str, value: str, info: VarInfo, region: int) -> Output:
-    if info.cls == "char":
+    if info.matlab and "\n" not in info.matlab:
+        value = info.matlab
+    elif info.cls == "char":
         value = f"'{value}'"
     elif info.cls == "string":
         value = f'"{value}"'
@@ -84,6 +96,13 @@ def _block_output(name: str, body: str, info: VarInfo, region: int) -> Output:
     if numeric and len(info.size) == 2:
         return Output("matrix", [region], name=name, text=textwrap.dedent(body).rstrip() + "\n",
                       rows=rows, columns=cols, var_type=info.cls)
+    if info.cls == "struct" and info.matlab:
+        header = "struct with fields:"
+        return Output("variableString", [region], name=name, header=header, text=info.matlab + "\n",
+                      rows=rows, columns=cols)
+    if info.cls == "cell" and info.matlab:
+        return Output("variableString", [region], name=name, header=f"{rows}\u00d7{cols} cell array",
+                      text=info.matlab + "\n", rows=rows, columns=cols)
     if info.cls == "struct":
         fields = re.sub(r"^\s*(scalar )?structure containing the fields:\s*\n", "", body.strip("\n") + "\n")
         fields = re.sub(r"^(\s*)(\w+) = ", r"\1\2: ", textwrap.dedent(fields), flags=re.M)

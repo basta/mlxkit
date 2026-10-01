@@ -39,6 +39,15 @@ live script keeps at the end, sit in the first cell of the notebook so it runs
 top to bottom; `mlx build` moves them back. A Markdown cell containing only
 `---` is a section break.
 
+## Showcase
+
+[`examples/showcase.ipynb`](examples/showcase.ipynb) demonstrates every feature, with outputs
+saved from a real run of the mlxkit kernel: the shared workspace, MATLAB-style outputs, figures
+with LaTeX labels, the syntax rewrites (name=value arguments, string concatenation, graphics
+dot notation, `tiledlayout`, `arguments` blocks, ODE extra parameters), warnings, errors and
+streaming output. The same content as a live script is in `examples/showcase.mlx`, and as a web
+page in `examples/showcase.html`. Rebuild all three with `uv run python examples/build_showcase.py`.
+
 ## The built-in editor
 
 `mlx serve` opens `http://127.0.0.1:8765` (or the next free port) with every

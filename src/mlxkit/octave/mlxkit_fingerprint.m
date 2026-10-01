@@ -22,7 +22,8 @@ function fp = mlxkit_fingerprint(fig)
         if iscell(str), str = strjoin(str, '\n'); end
         s = [s '|' char(str(:)')];
       case 'axes'
-        s = [s sprintf('|%g', get(h, 'xlim'), get(h, 'ylim'), get(h, 'zlim'), get(h, 'position'))];
+        % (not 'position': the window system can re-layout a figure after the code ran)
+        s = [s sprintf('|%g', get(h, 'xlim'), get(h, 'ylim'), get(h, 'zlim'))];
         s = [s '|' get(h, 'xgrid') get(h, 'ygrid') get(h, 'box') get(h, 'nextplot')];
         s = [s '|' get(h, 'xscale') get(h, 'yscale') sprintf('%g', get(h, 'xtick'), get(h, 'ytick'))];
         s = [s '|' sprintf('%g', isempty(get(h, 'xticklabel')))];

@@ -157,8 +157,16 @@ def _functions_first(nb) -> None:
 
 
 def _functions_back(cells: list) -> list:
-    """Undo _functions_first: drop the note and put function cells back where they were."""
+    """Undo _functions_first: drop the note and put function cells back where they were.
+
+    Function-only cells written in the notebook itself go to the end: a live
+    script may only define local functions after all of its other code.
+    """
     cells = [c for c in cells if not c.get("metadata", {}).get("mlxkit", {}).get("note")]
+    new_fn = [c for c in cells if c.cell_type == "code" and _is_function_code(c.source)
+              and "functions_from" not in c.get("metadata", {}).get("mlxkit", {})]
+    if new_fn:
+        cells = [c for c in cells if c not in new_fn] + new_fn
     fn = [c for c in cells if "functions_from" in c.get("metadata", {}).get("mlxkit", {})]
     if not fn:
         return cells
@@ -215,16 +223,26 @@ def notebook_cells(nb) -> list[dict]:
                     continue
                 if chunk.strip() in originals:  # this paragraph wasn't touched
                     cells.append({"kind": "text", "md": originals[chunk.strip()]})
-                elif all(l.startswith("- ") for l in lines):
-                    cells.extend({"kind": "text", "md": originals.get(l.strip(), md_from_notebook(l))} for l in lines)
+                elif lines[0].startswith(("- ", "* ")):
+                    # A list: each item starts with "- "; other lines continue the item above.
+                    items: list[str] = []
+                    for l in lines:
+                        if l.startswith(("- ", "* ")):
+                            items.append("- " + l[2:].strip())
+                        else:
+                            items[-1] += " " + l.strip()
+                    cells.extend({"kind": "text", "md": originals.get(it, md_from_notebook(it))} for it in items)
                 else:
                     cells.append({"kind": "text", "md": md_from_notebook(" ".join(l.strip() for l in lines))})
     return cells
 
 
-def from_notebook(nb, base_path: str | Path, out_path: str | Path) -> int:
-    """Write the notebook into an .mlx based on base_path. Returns the number of outputs kept."""
-    pkg = MlxPackage.read(base_path)
+def from_notebook(nb, base_path: str | Path | None, out_path: str | Path) -> int:
+    """Write the notebook into an .mlx based on base_path (None: a new live script).
+    Returns the number of outputs kept."""
+    from .package import new_package
+
+    pkg = MlxPackage.read(base_path) if base_path is not None and Path(base_path).exists() else new_package()
     base = Document(pkg.document_xml)
     nb = nbformat.from_dict(dict(nb))
     nb.cells = _functions_back(nb.cells)

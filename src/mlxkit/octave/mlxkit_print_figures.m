@@ -11,7 +11,8 @@ function mlxkit_print_figures(outdir, which)
     undo = {};
     try
       undo = latex_to_tex(f);
-      set(f, 'paperpositionmode', 'auto');
+      % Export at MATLAB's default figure size (560x420 px), whatever the hidden window did.
+      set(f, 'paperunits', 'inches', 'paperpositionmode', 'manual', 'paperposition', [0 0 560 420] / 96);
       print(f, '-dpng', '-r96', fullfile(outdir, sprintf('fig_%d.png', f)));
     catch err
       fprintf(2, 'mlxkit: could not save figure %d: %s\n', f, err.message);
