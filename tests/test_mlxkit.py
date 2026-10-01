@@ -130,3 +130,61 @@ def test_run_in_octave(tmp_path):
     assert any(o.kind == "figure" and o.png.startswith(b"\x89PNG") for o in result.outputs)
     assert result.error is None
     assert MlxPackage.read(tmp_path / "out.mlx").output_xml
+
+
+@pytest.mark.parametrize("src, expected", [
+    ("plot(x, y, LineWidth=2)", "plot(x, y, 'LineWidth', 2)"),
+    ("t = table(a, b, VariableNames=[\"a\" \"b\"]);", "t = table(a, b, 'VariableNames', [\"a\" \"b\"]);"),
+    ("if (a == b), c = 1; end", "if (a == b), c = 1; end"),
+    ("s = 'x=1'; f(s)", "s = 'x=1'; f(s)"),
+    ("x(k) = 3;", "x(k) = 3;"),
+])
+def test_name_value_args(src, expected):
+    from mlxkit.transform import name_value_args
+    assert name_value_args(src) == expected
+
+
+def test_arguments_block_removed_with_defaults():
+    from mlxkit.transform import strip_arguments_blocks
+    src = ("function y = f(x, n)\narguments\n    x (1,:) double {mustBeFinite}\n"
+           "    n (1,1) double = 3 % count\nend\ny = x * n;\nend")
+    out = strip_arguments_blocks(src)
+    assert "mustBeFinite" not in out
+    assert "if ~exist('n', 'var'), n = 3; end" in out
+    assert out.count("\n") == src.count("\n")
+
+
+def test_arguments_as_variable_name_is_not_a_block():
+    regions = split_regions(["arguments = 3;", "y = arguments + 1;"])
+    assert [(r.start_line, r.end_line) for r in regions] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.parametrize("src, expected", [
+    ('disp("Total: " + n + " items")', 'disp(mlxkit_strplus("Total: ", n, " items"))'),
+    ('msg = "a" + x;', 'msg = mlxkit_strplus("a", x);'),
+    ("y = a + b;", "y = a + b;"),
+    ('z = g("a" + b) + 1;', 'z = g(mlxkit_strplus("a", b)) + 1;'),
+    ('x = ["a" + 1, 2];', 'x = ["a" + 1, 2];'),
+    ("plot(x, y, LineWidth=2, SeriesIndex=1)", "plot(x, y, 'LineWidth', 2)"),
+])
+def test_transform(src, expected):
+    from mlxkit.transform import transform
+    assert transform(src) == expected
+
+
+def test_handle_dot_notation():
+    from mlxkit.transform import transform
+    code = ("s = scatter(x, y);\ns.XData = [s.XData 1];\nax = gca;\nax.YAxis.Exponent = 0;\n"
+            "d = ax.YLim(2) - ax.YLim(1);\nt.a = 1; disp(t.a)")
+    out = transform(code).split("\n")
+    assert out[1] == "mlxkit_set(s, 'XData', [get(s, 'XData') 1]);"
+    assert out[3] == "mlxkit_set(mlxkit_get(ax, 'YAxis'), 'Exponent', 0);"
+    assert out[4] == "d = get(ax, 'YLim')(2) - get(ax, 'YLim')(1);"
+    assert out[5] == "t.a = 1; disp(t.a)"  # structs are left alone
+
+
+def test_handle_indexed_assignment():
+    from mlxkit.transform import transform
+    out = transform("s = scatter(1, 2);\ns.XData(end+1) = 3;").split("\n")[1]
+    assert out == ("mlxkit_tmp_ = get(s, 'XData'); mlxkit_tmp_(end+1) = 3; "
+                   "mlxkit_set(s, 'XData', mlxkit_tmp_); clear mlxkit_tmp_;")

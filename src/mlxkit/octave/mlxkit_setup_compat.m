@@ -15,11 +15,25 @@ function mlxkit_setup_compat(gendir)
     src = fileread(orig);
     src = regexprep(src, ['(function\s+varargout\s*=\s*)' name '(?=\W)'], ['$1mlxkit_orig_' name], 'once');
     write_file(fullfile(gendir, ['mlxkit_orig_' name '.m']), src);
-    privdir = fullfile(fileparts(orig), 'private');
-    if exist(privdir, 'dir') && ~exist(fullfile(gendir, 'private'), 'dir')
-      copyfile(privdir, fullfile(gendir, 'private'));
-    end
+    copy_private(orig, gendir);
     write_file(fullfile(gendir, [name '.m']), strrep(shim_template(), 'NAME', name));
+  end
+
+  % imread: MATLAB also finds image files on the path.
+  orig = which('imread');
+  if ~isempty(orig)
+    src = regexprep(fileread(orig), '(function\s+\[?[^=]*=\s*)imread(?=\W)', '$1mlxkit_orig_imread', 'once');
+    write_file(fullfile(gendir, 'mlxkit_orig_imread.m'), src);
+    copy_private(orig, gendir);
+    write_file(fullfile(gendir, 'imread.m'), sprintf([ ...
+      'function varargout = imread(fname, varargin)\n' ...
+      '  %% mlxkit shim: like MATLAB, find image files on the path too.\n' ...
+      '  if ischar(fname) && ~isfile(fname)\n' ...
+      '    found = file_in_loadpath(fname);\n' ...
+      '    if ~isempty(found), fname = found; end\n' ...
+      '  end\n' ...
+      '  [varargout{1:max(nargout, 1)}] = mlxkit_orig_imread(fname, varargin{:});\n' ...
+      'end\n']));
   end
   % set(): MATLAB accepts defaults for object types Octave doesn't know about
   % (e.g. defaultLegendInterpreter); drop just those instead of failing.
@@ -58,6 +72,20 @@ function mlxkit_setup_compat(gendir)
   end
   addpath(gendir);
   addpath(fullfile(fileparts(mfilename('fullpath')), 'compat'));
+end
+
+function copy_private(orig, gendir)
+  % Functions copied out of Octave still need their private helpers.
+  privdir = fullfile(fileparts(orig), 'private');
+  if ~exist(privdir, 'dir'), return; end
+  dest = fullfile(gendir, 'private');
+  if ~exist(dest, 'dir'), mkdir(dest); end
+  files = dir(fullfile(privdir, '*.m'));
+  for i = 1:numel(files)
+    if ~exist(fullfile(dest, files(i).name), 'file')
+      copyfile(fullfile(privdir, files(i).name), dest);
+    end
+  end
 end
 
 function t = shim_template()

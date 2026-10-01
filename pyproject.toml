@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy", "scipy", "mat-io"]
 
+[project.optional-dependencies]
+symbolic = ["sympy"]  # used by Octave's symbolic package for MATLAB `syms` code
+
 [project.scripts]
 mlx = "mlxkit.cli:main"
 

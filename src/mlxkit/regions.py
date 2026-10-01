@@ -114,7 +114,7 @@ def scan_line(line: str, st: _State) -> bool:
         if m:
             word = m.group(0)
             if stmt_start and st.depth == 0:
-                if word in BLOCK_OPENERS:
+                if word in BLOCK_OPENERS and _is_keyword(word, line[m.end():], st.blocks):
                     st.blocks.append(word)
                 elif word == "end" and st.blocks:
                     st.blocks.pop()
@@ -132,6 +132,19 @@ def scan_line(line: str, st: _State) -> bool:
             continue
         i, prev, stmt_start = i + 1, "op", False
     return has_code
+
+
+_CONTEXTUAL = {"arguments": ("function",), "properties": ("classdef",), "methods": ("classdef",),
+               "events": ("classdef",), "enumeration": ("classdef",)}
+
+
+def _is_keyword(word: str, rest: str, blocks: list[str]) -> bool:
+    """`arguments = 3` is a variable; `arguments` directly inside a function is a block."""
+    if re.match(r"\s*=(?!=)", rest):
+        return False
+    if word in _CONTEXTUAL:
+        return bool(blocks) and blocks[-1] in _CONTEXTUAL[word]
+    return True
 
 
 def _is_command_syntax(word: str, rest: str) -> bool:

@@ -1,7 +1,10 @@
 """Execute a live script in GNU Octave and embed the results as MATLAB outputs."""
 from __future__ import annotations
 
+import importlib.util
+import os
 import re
+import sys
 import shutil
 import struct
 import subprocess
@@ -13,6 +16,7 @@ from . import display, matcompat
 from .document import Document
 from .outputs import Output, build_output_xml, code_line_numbers
 from .package import MlxPackage
+from .transform import find_handle_vars, transform
 from .regions import Region, _State, scan_line, split_regions
 
 OCTAVE_SUPPORT = Path(__file__).parent / "octave"
@@ -65,12 +69,13 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
         d.mkdir()
     try:
         extra_path = _prepare_workdir(mlx_in.parent, work, result.notes)
+        handles = find_handle_vars("\n".join(t or "" for t in lines))
         for name, src in split_local_functions(lines, regions).items():
-            (fndir / f"{name}.m").write_text(src)
+            (fndir / f"{name}.m").write_text(transform(src, handles))
         executable = [r for r in regions if not r.is_function]
         for r in executable:
             code = "\n".join(t or "" for t in lines[r.start_line:r.end_line + 1])
-            (out / f"code_{r.number}.m").write_text(code + "\n")
+            (out / f"code_{r.number}.m").write_text(transform(code, handles) + "\n")
 
         nums = " ".join(str(r.number) for r in executable)
         script = (f"addpath('{_q(OCTAVE_SUPPORT)}'); mlxkit_setup_compat('{_q(tmp / 'compat')}'); "
@@ -83,7 +88,7 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
                   f"mlxkit_run('{_q(out)}', [{nums}]);")
         log(f"running {len(executable)} regions in Octave...")
         proc = subprocess.run([octave, "--no-gui", "--quiet", "--norc", "--no-history", "--eval", script],
-                              cwd=work, capture_output=True, text=True, timeout=timeout)
+                              cwd=work, capture_output=True, text=True, timeout=timeout, env=_octave_env())
         result.octave_log = proc.stdout + proc.stderr
         result.outputs, result.error = _collect(regions, executable, out)
     finally:
@@ -98,6 +103,14 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
     pkg.output_xml = build_output_xml(regions, result.outputs, code_line_numbers(lines), layout)
     pkg.write(mlx_out)
     return result
+
+
+def _octave_env() -> dict[str, str]:
+    env = dict(os.environ)
+    # Octave's symbolic package runs SymPy through $PYTHON; use ours if it has SymPy.
+    if "PYTHON" not in env and importlib.util.find_spec("sympy") is not None:
+        env["PYTHON"] = sys.executable
+    return env
 
 
 def find_project_root(folder: Path) -> Path | None:
@@ -126,8 +139,20 @@ def _prepare_workdir(src: Path, work: Path, notes: list[str]) -> list[Path]:
             notes += matcompat.convert(entry, target)
         else:
             target.symlink_to(entry)
+    # Helper .m files using syntax Octave lacks get rewritten copies, first on the path.
+    for mfile in root.rglob("*.m"):
+        if ".git" in mfile.parts or mfile.stat().st_size > 2_000_000:
+            continue
+        try:
+            code = mfile.read_text()
+        except UnicodeDecodeError:
+            continue
+        new = transform(code)
+        if new != code and not (converted / mfile.name).exists():
+            (converted / mfile.name).write_text(new)
+            notes.append(f"rewrote {mfile.relative_to(root)} for Octave (newer MATLAB syntax)")
     if root == src:
-        return []
+        return [converted]
     # .mat files elsewhere in the project: converted copies go first on the path.
     for mat in root.rglob("*.mat"):
         if ".git" in mat.parts or mat.parent == root or mat.stat().st_size > 200_000_000:
