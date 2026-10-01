@@ -129,6 +129,17 @@ main { overflow: auto; min-width: 0; }
 .katex-display { margin: .5em 0; }
 .eq-display { text-align: center; }
 .menu-toggle { display: none; }
+.ws { position: relative; }
+.ws summary { list-style: none; }
+.ws summary::-webkit-details-marker { display: none; }
+.ws-panel { position: absolute; right: 0; top: 36px; width: min(440px, 92vw); max-height: 60vh; overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 20; padding: 6px 0; font-size: 13px; }
+.ws-panel table { width: 100%; border-collapse: collapse; }
+.ws-panel td { padding: 3px 12px; white-space: nowrap; }
+.ws-panel td:first-child { font-family: ui-monospace, Menlo, monospace; }
+.ws-panel td + td { color: var(--muted); white-space: normal; }
+.ws-panel .none { padding: 8px 12px; color: var(--muted); }
+.code-cell.ran { box-shadow: inset 3px 0 0 var(--ok), var(--shadow); }
+.cell-tools .run { color: var(--accent); font-weight: 600; }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }
   aside { position: fixed; top: 52px; bottom: 0; left: 0; width: 82vw; max-width: 300px; z-index: 10; transform: translateX(-105%); transition: transform .2s; box-shadow: var(--shadow); }
@@ -147,8 +158,10 @@ main { overflow: auto; min-width: 0; }
     <div class="doc-title" id="docTitle"></div>
     <span class="status" id="status"></span>
     <button class="btn hide-sm" id="themeBtn" title="Toggle theme">◐</button>
+    <details class="ws" id="ws"><summary class="btn" title="Variables in the Octave session">Workspace · <span id="wsCount">–</span></summary><div class="ws-panel" id="wsPanel"></div></details>
+    <button class="btn hide-sm" id="restartBtn" title="Clear the workspace: restart Octave">⟲ Restart</button>
     <button class="btn" id="saveBtn" disabled>Save <span class="kbd">⌘S</span></button>
-    <button class="btn primary" id="runBtn" disabled>▶ Run <span class="kbd">⌘⏎</span></button>
+    <button class="btn primary" id="runBtn" disabled title="Run the whole script in a fresh workspace (⇧⌘⏎)">▶ Run all</button>
   </header>
   <aside id="sidebar">
     <input class="filter" id="filter" placeholder="Filter files…" aria-label="Filter files">
@@ -218,6 +231,7 @@ window.addEventListener("hashchange", () => {
 });
 
 function setDoc(doc) {
+  if (state.path !== doc.path) state.focusCell = null;
   const keepScroll = state.path === doc.path ? $("#main").scrollTop : 0;
   state.doc = doc; state.path = doc.path;
   state.cells = doc.cells.map(c => ({ ...c, stale: false }));
@@ -251,9 +265,13 @@ function render() {
   $("#main").scrollTop = top;
 }
 
-function tools(i) {
+function tools(i, code) {
   const t = document.createElement("div"); t.className = "cell-tools";
-  const add = (label, title, fn) => { const b = document.createElement("button"); b.className = "icon-btn"; b.textContent = label; b.title = title; b.onclick = e => { e.stopPropagation(); fn(); }; t.appendChild(b); };
+  const add = (label, title, fn, cls) => { const b = document.createElement("button"); b.className = "icon-btn " + (cls || ""); b.textContent = label; b.title = title; b.onclick = e => { e.stopPropagation(); fn(); }; t.appendChild(b); };
+  if (code) {
+    add("▶ Section", "Run this section in the current workspace (⌘⏎)", () => run("section", i), "run");
+    add("⇥ To here", "Run everything up to the end of this block", () => run("upto", i), "run");
+  }
   add("↑", "Move up", () => move(i, -1));
   add("↓", "Move down", () => move(i, 1));
   add("✕", "Delete", () => { state.cells.splice(i, 1); markDirty(); render(); });
@@ -311,8 +329,9 @@ async function finishText(c) {
 }
 
 function codeCell(c, i, firstLine) {
-  const el = document.createElement("div"); el.className = "cell code-cell"; el.dataset.cell = i;
-  el.appendChild(tools(i));
+  const el = document.createElement("div"); el.className = "cell code-cell" + (c.ran && !c.stale ? " ran" : ""); el.dataset.cell = i;
+  if (c.ran) el.title = "Ran in the current workspace";
+  el.appendChild(tools(i, true));
   const host = document.createElement("div"); el.appendChild(host);
   const cm = CodeMirror(host, {
     value: c.code, mode: "octave", lineNumbers: true, firstLineNumber: firstLine, matchBrackets: true,
@@ -331,10 +350,10 @@ function codeCell(c, i, firstLine) {
   }
   cm.on("change", () => {
     c.code = cm.getValue();
-    if (!c.stale) { c.stale = true; widgets.forEach(w => w.node.classList.add("stale")); }
+    if (!c.stale) { c.stale = true; el.classList.remove("ran"); widgets.forEach(w => w.node.classList.add("stale")); }
     markDirty();
   });
-  cm.on("focus", () => el.classList.add("focused"));
+  cm.on("focus", () => { el.classList.add("focused"); state.focusCell = i; });
   cm.on("blur", () => el.classList.remove("focused"));
   return el;
 }
@@ -352,8 +371,14 @@ function updateStatus(text, cls) {
   $("#saveBtn").disabled = !state.doc || !state.dirty || running;
   const rb = $("#runBtn");
   rb.disabled = !state.doc;
-  rb.innerHTML = running ? "■ Stop" : `▶ Run <span class="kbd">⌘⏎</span>`;
-  rb.classList.toggle("primary", true);
+  rb.innerHTML = running ? "■ Stop" : "▶ Run all";
+  $("#restartBtn").disabled = !state.doc || running;
+  const sess = state.doc && state.doc.session;
+  const vars = sess && sess.alive ? sess.variables : null;
+  $("#wsCount").textContent = vars ? vars.length : "–";
+  $("#wsPanel").innerHTML = !vars ? `<div class="none">No Octave session yet. Run a section to start one.</div>`
+    : !vars.length ? `<div class="none">The workspace is empty.</div>`
+    : `<table>${vars.map(v => `<tr><td>${esc(v.name)}</td><td>${esc(v.size)} ${esc(v.class)}</td></tr>`).join("")}</table>`;
 }
 function banner(cls, html) {
   const d = document.createElement("div"); d.className = "banner " + cls; d.innerHTML = html;
@@ -381,19 +406,28 @@ async function save() {
     return false;
   }
 }
-async function run() {
+async function run(mode = "all", cellIndex = null) {
   if (!state.doc) return;
   if (state.job && state.job.state === "running") { await api("POST", "/api/cancel", { id: state.job.id }); return; }
+  // Cells and saved blocks can differ before a save, so point at the cell by its code-cell number.
+  const ordinal = cellIndex == null ? null : state.cells.slice(0, cellIndex + 1).filter(c => c.kind === "code").length - 1;
   if (state.dirty && !(await save())) return;
+  let cell = null;
+  if (ordinal != null) {
+    const codeIdx = state.cells.map((c, k) => c.kind === "code" ? k : -1).filter(k => k >= 0);
+    cell = codeIdx[Math.min(ordinal, codeIdx.length - 1)];
+  }
   state.banners = [];
-  const b = banner("info", `<b>Running in Octave…</b> <span class="prog-text"></span><div class="progress"><div></div></div>`);
+  const what = mode === "all" ? "Running the whole script in a fresh workspace…" : mode === "section" ? "Running section…" : "Running up to here…";
+  const b = banner("info", `<b>${what}</b> <span class="prog-text"></span><div class="progress"><div></div></div>`);
   try {
-    const { id } = await api("POST", "/api/run", { path: state.path });
+    const { id } = await api("POST", "/api/run", { path: state.path, mode, cell });
     state.job = { id, state: "running" }; updateStatus();
     while (true) {
       await new Promise(r => setTimeout(r, 500));
       const j = await api("GET", "/api/job?id=" + id);
       state.job = j;
+      if (j.phase === "starting Octave") b.querySelector(".prog-text").textContent = "starting Octave…";
       if (j.total) { b.querySelector(".progress > div").style.width = (100 * j.done / j.total) + "%"; b.querySelector(".prog-text").textContent = `statement ${Math.min(j.done + 1, j.total)} of ${j.total}`; }
       if (j.state !== "running") break;
     }
@@ -401,13 +435,13 @@ async function run() {
     state.banners = [];
     const doc = await api("GET", "/api/doc?path=" + encodeURIComponent(state.path));
     setDoc(doc);
-    if (j.state === "cancelled") banner("warn", "Run stopped. The file was not changed.");
+    if (j.state === "cancelled") banner("warn", "Stopped. Outputs of the statements that finished were kept; the workspace is still there.");
     else if (j.state === "failed") banner("err", `Run failed: ${esc(j.error)}<details><summary>Details</summary><pre>${esc(j.log)}</pre></details>`);
     else {
       const notes = j.notes.length ? `<details><summary>${j.notes.length} compatibility note(s)</summary><pre>${esc(j.notes.join("\n"))}</pre></details>` : "";
       const log = `<details><summary>Octave log</summary><pre>${esc(j.log || "(empty)")}</pre></details>`;
       if (j.error) banner("err", `Stopped at an error: <b>${esc(j.error)}</b> — see the red output below.${notes}${log}`);
-      else banner("info", `<span style="color:var(--ok)">✓ Ran successfully</span> — outputs saved into the .mlx.${notes}${log}`);
+      else banner("info", `<span style="color:var(--ok)">✓ Ran ${j.ran} statement${j.ran === 1 ? "" : "s"}</span> — outputs saved into the .mlx.${notes}${log}`);
       const firstErr = document.querySelector(".out.error");
       if (firstErr) firstErr.scrollIntoView({ block: "center", behavior: "smooth" });
     }
@@ -415,11 +449,23 @@ async function run() {
   state.job = null; updateStatus();
 }
 $("#saveBtn").onclick = save;
-$("#runBtn").onclick = run;
+$("#runBtn").onclick = () => run("all");
+document.addEventListener("click", e => { const ws = $("#ws"); if (ws.open && !ws.contains(e.target)) ws.open = false; });
+$("#restartBtn").onclick = async () => {
+  if (!state.doc) return;
+  await api("POST", "/api/restart", { path: state.path });
+  setDoc(await api("GET", "/api/doc?path=" + encodeURIComponent(state.path)));
+  state.banners = []; banner("info", "Workspace cleared. The next run starts a fresh Octave.");
+};
 document.addEventListener("keydown", e => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === "s") { e.preventDefault(); save(); }
-  if (mod && e.key === "Enter") { e.preventDefault(); document.activeElement && document.activeElement.blur && document.activeElement.tagName === "TEXTAREA" && document.activeElement.blur(); run(); }
+  if (mod && e.key === "Enter") {
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.tagName === "TEXTAREA" && !document.activeElement.closest(".CodeMirror")) document.activeElement.blur();
+    if (e.shiftKey || state.focusCell == null || !state.cells[state.focusCell] || state.cells[state.focusCell].kind !== "code") run("all");
+    else run("section", state.focusCell);
+  }
 });
 window.addEventListener("beforeunload", e => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
 

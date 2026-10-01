@@ -59,53 +59,103 @@ class Cancelled(Exception):
     pass
 
 
+@dataclass
+class Workspace:
+    """Temporary folders for running one script: a mirror of its folder, local functions, outputs."""
+    script: Path
+    tmp: Path
+    work: Path
+    functions: Path
+    extra_path: list[Path]
+    notes: list[str]
+
+    @classmethod
+    def create(cls, script: Path) -> "Workspace":
+        tmp = Path(tempfile.mkdtemp(prefix="mlxkit_"))
+        work, fndir = tmp / "work", tmp / "functions"
+        work.mkdir()
+        fndir.mkdir()
+        notes: list[str] = []
+        extra = _prepare_workdir(script.parent, work, notes)
+        return cls(script, tmp, work, fndir, extra, notes)
+
+    def setup_commands(self) -> str:
+        """Octave commands that prepare a fresh session (paths, shims, headless graphics)."""
+        return (f"addpath('{_q(OCTAVE_SUPPORT)}'); mlxkit_setup_compat('{_q(self.tmp / 'compat')}'); "
+                + "".join(f"addpath('{_q(p)}', '-end'); " for p in self.extra_path[1:])
+                + (f"addpath('{_q(self.extra_path[0])}'); " if self.extra_path else "")
+                + f"addpath('{_q(self.functions)}'); "
+                + f"mlxkit_project_root('{_q(find_project_root(self.script.parent) or self.script.parent)}'); "
+                "graphics_toolkit('qt'); set(0, 'defaultfigurevisible', 'off'); more off; "
+                "warning('off', 'Octave:latex-markup-not-supported-for-tick-marks'); "
+                "warning('off', 'Octave:LaTeX:internal-error'); ")
+
+    def write_functions(self, lines, regions, handles) -> set[str]:
+        """(Re)write local function files; returns names that changed or disappeared."""
+        funcs = {name: transform(src, handles) for name, src in split_local_functions(lines, regions).items()}
+        changed = set()
+        for f in self.functions.glob("*.m"):
+            if f.stem not in funcs:
+                f.unlink()
+                changed.add(f.stem)
+        for name, src in funcs.items():
+            f = self.functions / f"{name}.m"
+            if not f.exists() or f.read_text() != src:
+                f.write_text(src)
+                changed.add(name)
+        return changed
+
+    def new_outdir(self) -> Path:
+        out = Path(tempfile.mkdtemp(prefix="run_", dir=self.tmp))
+        return out
+
+    @staticmethod
+    def write_code(out: Path, lines, regions_to_run, handles) -> None:
+        for r in regions_to_run:
+            code = "\n".join(t or "" for t in lines[r.start_line:r.end_line + 1])
+            (out / f"code_{r.number}.m").write_text(transform(code, handles) + "\n")
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def parse_script(doc: Document):
+    lines = doc.lines()
+    sections = {b.first_line for b in doc.blocks if b.kind == "sectionbreak"}
+    regions = split_regions(lines, sections)
+    handles = find_handle_vars("\n".join(t or "" for t in lines))
+    return lines, regions, handles
+
+
 def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout: float | None = 1800,
         keep_workdir: bool = False, log=lambda msg: None, progress=lambda done, total: None,
         cancel: threading.Event | None = None) -> RunResult:
-    """Run a live script in Octave and write it, with outputs, to mlx_out.
+    """Run a live script in a fresh Octave and write it, with outputs, to mlx_out.
 
     progress(done, total) is called as regions finish; setting `cancel` stops Octave.
     """
     mlx_in = Path(mlx_in).resolve()
     pkg = MlxPackage.read(mlx_in)
-    doc = Document(pkg.document_xml)
-    lines = doc.lines()
-    sections = {b.first_line for b in doc.blocks if b.kind == "sectionbreak"}
-    regions = split_regions(lines, sections)
+    lines, regions, handles = parse_script(Document(pkg.document_xml))
     result = RunResult(outputs=[])
-
-    tmp = Path(tempfile.mkdtemp(prefix="mlxkit_"))
-    work, fndir, out = tmp / "work", tmp / "functions", tmp / "out"
-    for d in (work, fndir, out):
-        d.mkdir()
+    ws = Workspace.create(mlx_in)
+    result.notes = ws.notes
     try:
-        extra_path = _prepare_workdir(mlx_in.parent, work, result.notes)
-        handles = find_handle_vars("\n".join(t or "" for t in lines))
-        for name, src in split_local_functions(lines, regions).items():
-            (fndir / f"{name}.m").write_text(transform(src, handles))
+        ws.write_functions(lines, regions, handles)
         executable = [r for r in regions if not r.is_function]
-        for r in executable:
-            code = "\n".join(t or "" for t in lines[r.start_line:r.end_line + 1])
-            (out / f"code_{r.number}.m").write_text(transform(code, handles) + "\n")
-
+        out = ws.new_outdir()
+        ws.write_code(out, lines, executable, handles)
         nums = " ".join(str(r.number) for r in executable)
-        script = (f"addpath('{_q(OCTAVE_SUPPORT)}'); mlxkit_setup_compat('{_q(tmp / 'compat')}'); "
-                  + "".join(f"addpath('{_q(p)}', '-end'); " for p in extra_path[1:])
-                  + (f"addpath('{_q(extra_path[0])}'); " if extra_path else "")
-                  + f"addpath('{_q(fndir)}'); mlxkit_project_root('{_q(find_project_root(mlx_in.parent) or mlx_in.parent)}'); "
-                  "graphics_toolkit('qt'); set(0, 'defaultfigurevisible', 'off'); more off; "
-                  "warning('off', 'Octave:latex-markup-not-supported-for-tick-marks'); "
-                  "warning('off', 'Octave:LaTeX:internal-error'); "
-                  f"mlxkit_run('{_q(out)}', [{nums}]);")
+        script = ws.setup_commands() + f"mlxkit_run('{_q(out)}', [{nums}]);"
         log(f"running {len(executable)} regions in Octave...")
         result.octave_log = _run_octave([octave, "--no-gui", "--quiet", "--norc", "--no-history", "--eval", script],
-                                        work, out, len(executable), timeout, progress, cancel)
-        result.outputs, result.error = _collect(regions, executable, out)
+                                        ws.work, out, len(executable), timeout, progress, cancel)
+        result.outputs, result.error = collect(executable, out)
     finally:
         if keep_workdir:
-            log(f"work directory kept at {tmp}")
+            log(f"work directory kept at {ws.tmp}")
         else:
-            shutil.rmtree(tmp, ignore_errors=True)
+            ws.cleanup()
 
     layout = "inline"
     if pkg.output_xml and (m := re.search(rb"<layoutState>(\w+)</layoutState>", pkg.output_xml)):
@@ -116,7 +166,7 @@ def run(mlx_in: str | Path, mlx_out: str | Path, octave: str = "octave", timeout
 
 
 def _run_octave(cmd, cwd, out: Path, total: int, timeout, progress, cancel) -> str:
-    log_file = out.parent / "octave.log"
+    log_file = out / "octave.log"
     with open(log_file, "w") as log:
         proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=_octave_env())
         start, done = time.monotonic(), -1
@@ -227,7 +277,8 @@ def _split_warnings(text: str) -> tuple[list[str], list[str]]:
     return body, warnings
 
 
-def _collect(regions: list[Region], executable: list[Region], out: Path) -> tuple[list[Output], str | None]:
+def collect(executable: list[Region], out: Path) -> tuple[list[Output], str | None]:
+    """Outputs of the regions that ran (in order) from Octave's per-region files in `out`."""
     pending: list[tuple[int, int, Output]] = []  # (region, order, output)
     fig_regions: dict[int, list[int]] = {}
     error = None
@@ -256,7 +307,8 @@ def _collect(regions: list[Region], executable: list[Region], out: Path) -> tupl
         if png.exists():
             data = png.read_bytes()
             w, h = struct.unpack(">II", data[16:24])
-            pending.append((regs[0], len(pending), Output("figure", regs, png=data, size=(w, h))))
+            pending.append((regs[0], len(pending), Output("figure", regs, png=data, size=(w, h),
+                                                          extra={"handle": handle})))
     pending.sort(key=lambda p: (p[0], p[1]))
     return [p[2] for p in pending], error
 

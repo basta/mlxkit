@@ -26,10 +26,10 @@ from urllib.parse import parse_qs, urlparse
 
 from .document import Document
 from .livetext import cells_to_text, from_text, to_cells
-from .outputs import build_output_xml, code_line_numbers
+from .outputs import build_output_xml, code_line_numbers, parse_output_xml, remap_outputs
 from .package import MlxPackage
-from .regions import split_regions
 from .render import _md_html, _read_outputs
+from .runner import parse_script
 
 WEB = Path(__file__).parent / "web"
 
@@ -44,6 +44,18 @@ class App:
         self.octave = octave
         self.jobs: dict[str, dict] = {}
         self.lock = threading.Lock()  # one writer at a time
+        self.sessions: dict[str, "Session"] = {}
+
+    def session(self, rel: str):
+        from .session import Session
+
+        if rel not in self.sessions:
+            self.sessions[rel] = Session(self.resolve(rel), self.octave)
+        return self.sessions[rel]
+
+    def close_all(self) -> None:
+        for sess in self.sessions.values():
+            sess.close()
 
     # --- paths ---------------------------------------------------------------
 
@@ -93,8 +105,19 @@ class App:
                 if c["first_line"] <= line < c["first_line"] + n:
                     c["outputs"].append({"line": line - c["first_line"], "html": html})
                     break
+        sess = self.sessions.get(rel)
+        info = {"alive": False, "busy": False, "variables": []}
+        if sess is not None and sess.alive:
+            info = {"alive": True, "busy": sess.busy, "variables": sess.variables}
+            lines, regions, _ = parse_script(doc)
+            for c, b in zip(cells, doc.blocks):
+                if c["kind"] != "code":
+                    continue
+                inside = [r for r in regions if not r.is_function
+                          and b.first_line <= r.start_line < b.first_line + b.line_count]
+                c["ran"] = bool(inside) and all(sess.has_run(lines, r) for r in inside)
         return {"path": rel, "title": title, "mtime": path.stat().st_mtime, "cells": cells,
-                "backup": path.with_name(path.name + ".bak").exists()}
+                "backup": path.with_name(path.name + ".bak").exists(), "session": info}
 
     def _text_html(self, md: str, pkg) -> str:
         from .render import _block_html
@@ -109,7 +132,8 @@ class App:
 
     def save(self, rel: str, mtime: float | None, cells: list[dict]) -> dict:
         path = self.resolve(rel)
-        if any(j["path"] == rel and j["state"] == "running" for j in self.jobs.values()):
+        if any(j["path"] == rel and j["state"] == "running" for j in self.jobs.values()) or (
+                rel in self.sessions and self.sessions[rel].busy):
             raise Conflict("A run is in progress for this file; wait for it to finish or cancel it.")
         with self.lock:
             if mtime is not None and abs(path.stat().st_mtime - mtime) > 1e-6:
@@ -118,26 +142,28 @@ class App:
             base = Document(pkg.document_xml)
             doc = from_text(cells_to_text(cells), base)
             if doc.to_xml() != pkg.document_xml:
-                code_changed = [b.code for b in doc.code_blocks] != [b.code for b in base.code_blocks]
                 pkg.document_xml = doc.to_xml()
-                if code_changed and pkg.output_xml is not None:
-                    sections = {b.first_line for b in doc.blocks if b.kind == "sectionbreak"}
-                    pkg.output_xml = build_output_xml(split_regions(doc.lines(), sections), [],
-                                                      code_line_numbers(doc.lines()))
+                if pkg.output_xml is not None:
+                    pkg.output_xml = carry_outputs(pkg.output_xml, base, doc)
                 shutil.copy2(path, path.with_name(path.name + ".bak"))
                 pkg.write(path)
         return self.doc(rel)
 
     # --- running -------------------------------------------------------------
 
-    def start_run(self, rel: str) -> str:
-        from .runner import Cancelled, run
+    def start_run(self, rel: str, mode: str = "all", cell: int | None = None) -> str:
+        """Run in the file's Octave session: everything (fresh workspace), the
+        section holding `cell`, or every statement up to the end of `cell`."""
+        from .runner import Cancelled
 
         path = self.resolve(rel)
+        sess = self.session(rel)
+        if sess.busy:
+            raise Conflict("Something is already running in this file's session.")
         job_id = uuid.uuid4().hex[:12]
         cancel = threading.Event()
         job = {"id": job_id, "path": rel, "state": "running", "done": 0, "total": 0, "error": None,
-               "notes": [], "log": "", "cancel": cancel}
+               "notes": [], "log": "", "cancel": cancel, "mode": mode}
         self.jobs[job_id] = job
 
         def progress(done, total):
@@ -145,30 +171,100 @@ class App:
 
         def work():
             try:
+                doc = Document(MlxPackage.read(path).document_xml)
+                lines, regions, handles = parse_script(doc)
+                numbers = select_regions(doc, regions, mode, cell)
+                if mode == "all" or not sess.alive:
+                    job["phase"] = "starting Octave"
+                    sess.restart() if mode == "all" else sess.start()
+                job["phase"] = "running"
+                start_log = len(sess.log)
+                result = sess.execute(lines, regions, numbers, handles, progress=progress, cancel=cancel)
                 with self.lock:
-                    tmp_out = path.with_name(f".{path.stem}.mlxkit-run.mlx")
-                    result = run(path, tmp_out, octave=self.octave, progress=progress, cancel=cancel)
-                    shutil.copy2(path, path.with_name(path.name + ".bak"))
-                    tmp_out.replace(path)
-                job["notes"], job["error"], job["log"] = result.notes, result.error, result.octave_log[-20000:]
-                job["state"] = "done"
+                    pkg = MlxPackage.read(path)
+                    if Document(pkg.document_xml).to_xml() != doc.to_xml():
+                        raise Conflict("The file changed while running; outputs were not saved.")
+                    existing = [] if mode == "all" else parse_output_xml(pkg.output_xml)
+                    outputs = merge_outputs(existing, result.outputs, set(numbers), sess.figure_ids)
+                    layout = "inline"
+                    pkg.output_xml = build_output_xml(regions, outputs, code_line_numbers(lines), layout)
+                    pkg.write(path)
+                job["notes"], job["error"] = sess.notes, result.error
+                job["log"] = "\n".join(sess.log[start_log:])[-20000:]
+                job["ran"] = len(result.executed)
+                job["state"] = "cancelled" if result.cancelled else "done"
             except Cancelled:
                 job["state"] = "cancelled"
             except Exception as e:  # noqa: BLE001 - reported to the UI
                 job["state"], job["error"] = "failed", f"{type(e).__name__}: {e}"
                 job["log"] = traceback.format_exc()
-            finally:
-                for leftover in path.parent.glob(f".{path.stem}.mlxkit-run.mlx"):
-                    leftover.unlink(missing_ok=True)
 
         threading.Thread(target=work, daemon=True).start()
         return job_id
+
+    def restart(self, rel: str) -> None:
+        sess = self.session(rel)
+        if sess.busy:
+            sess.interrupt()
+        sess.close()
 
     def job(self, job_id: str) -> dict:
         job = self.jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
         return {k: v for k, v in job.items() if k != "cancel"}
+
+
+def select_regions(doc: Document, regions, mode: str, cell: int | None) -> list[int]:
+    """Region numbers to run. `cell` indexes doc.blocks (cells and blocks match after a save)."""
+    runnable = [r for r in regions if not r.is_function]
+    if mode == "all" or cell is None:
+        return [r.number for r in runnable]
+    block = doc.blocks[cell]
+    if mode == "upto":
+        end = block.first_line + block.line_count
+        return [r.number for r in runnable if r.start_line < end]
+    # section: between the section breaks around the cell
+    breaks = [b.first_line for b in doc.blocks if b.kind == "sectionbreak"]
+    lo = max([ln for ln in breaks if ln <= block.first_line], default=-1)
+    hi = min([ln for ln in breaks if ln > block.first_line], default=10**9)
+    return [r.number for r in runnable if lo < r.start_line < hi]
+
+
+def merge_outputs(existing, new, requested: set[int], figure_ids: dict[int, str]):
+    """Replace the outputs of the statements that were run; keep everything else.
+
+    A figure drawn again by this run (same Octave figure) replaces its old
+    picture and keeps the old picture's other regions.
+    """
+    new_figs = {o.extra["handle"]: o for o in new if o.kind == "figure"}
+    by_id = {fid: h for h, fid in figure_ids.items()}
+    kept = []
+    for o in existing:
+        if o.kind == "figure":
+            h = by_id.get(o.extra.get("id"))
+            if h in new_figs:
+                fresh = new_figs[h]
+                fresh.regions = sorted({r for r in o.regions if r not in requested} | set(fresh.regions))
+                continue
+            o.regions = [r for r in o.regions if r not in requested]
+            if o.regions:
+                kept.append(o)
+        elif not any(r in requested for r in o.regions):
+            kept.append(o)
+    for h, o in new_figs.items():
+        o.extra["id"] = figure_ids.setdefault(h, str(uuid.uuid4()))
+    merged = kept + list(new)
+    merged.sort(key=lambda o: min(o.regions) if o.regions else 0)
+    return merged
+
+
+def carry_outputs(output_xml: bytes, old: Document, new: Document) -> bytes:
+    """output.xml for an edited document: outputs of unchanged statements stay."""
+    old_lines, old_regions, _ = parse_script(old)
+    new_lines, new_regions, _ = parse_script(new)
+    outputs = remap_outputs(parse_output_xml(output_xml), old_lines, old_regions, new_lines, new_regions)
+    return build_output_xml(new_regions, outputs, code_line_numbers(new_lines))
 
 
 def make_handler(app: App):
@@ -237,10 +333,13 @@ def make_handler(app: App):
                 elif url.path == "/api/run":
                     if body.get("cells") is not None:
                         app.save(body["path"], body.get("mtime"), body["cells"])
-                    self._json({"id": app.start_run(body["path"])})
+                    self._json({"id": app.start_run(body["path"], body.get("mode", "all"), body.get("cell"))})
                 elif url.path == "/api/cancel":
                     job = app.jobs[body["id"]]
                     job["cancel"].set()
+                    self._json({"ok": True})
+                elif url.path == "/api/restart":
+                    app.restart(body["path"])
                     self._json({"ok": True})
                 else:
                     self._error(HTTPStatus.NOT_FOUND, "not found")
@@ -252,11 +351,18 @@ def make_handler(app: App):
 
 def serve(root: Path, port: int = 8765, octave: str = "octave", open_browser: bool = True, file: str | None = None):
     app = App(root, octave)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+    for candidate in range(port, port + 20):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), make_handler(app))
+            break
+        except OSError:
+            continue  # port in use (maybe another `mlx serve`): try the next one
+    else:
+        raise SystemExit(f"no free port between {port} and {port + 19}")
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     if file:
         url += f"#{file}"
-    print(f"mlx editor running at {url}  (serving {app.root}; Ctrl+C to stop)")
+    print(f"mlx editor running at {url}  (serving {app.root}; Ctrl+C to stop)", flush=True)
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
@@ -264,4 +370,5 @@ def serve(root: Path, port: int = 8765, octave: str = "octave", open_browser: bo
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
+        app.close_all()
         server.server_close()

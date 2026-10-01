@@ -15,13 +15,27 @@ mlx show   script.mlx        # print the plain-text version
 
 ## The editor
 
-`mlx serve` opens `http://127.0.0.1:8765` with every `.mlx` under the folder in
-a sidebar. Click a paragraph to edit it as Markdown; code cells have MATLAB
-syntax highlighting. **⌘S** saves into the `.mlx` (keeping a `.bak`), **⌘⏎**
-saves and runs the whole script in Octave with a progress bar and a Stop button.
-Figures and printed output appear right under the line that produced them, and
-are dimmed as outdated once you edit that code. The server only listens on
-localhost and only touches `.mlx` files inside the folder you gave it.
+`mlx serve` opens `http://127.0.0.1:8765` (or the next free port) with every
+`.mlx` under the folder in a sidebar. Click a paragraph to edit it as Markdown;
+code cells have MATLAB syntax highlighting.
+
+Each open file gets its own Octave session that keeps its workspace between
+runs, like MATLAB's Live Editor:
+
+- **▶ Section** on a code cell (or **⌘⏎** with the cursor in it) runs that
+  section in the current workspace; **⇥ To here** runs everything up to it.
+- **▶ Run all** (**⇧⌘⏎**) runs the whole script in a fresh workspace.
+- **■ Stop** interrupts Octave but keeps the session and its variables;
+  **⟲ Restart** clears the workspace.
+- **Workspace** lists the session's variables. Code that ran in the current
+  session has a green edge.
+
+Figures and printed output appear right under the line that produced them and
+are saved into the `.mlx`. A partial run replaces only the outputs of the
+statements it ran; editing code dims the outputs it affects, and saving keeps
+outputs of statements you didn't change. **⌘S** saves (keeping a `.bak`). The
+server only listens on localhost and only touches `.mlx` files inside the
+folder you gave it.
 
 ## Install
 

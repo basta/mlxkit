@@ -213,3 +213,71 @@ def test_server_save_roundtrip(tmp_path):
         app.save("k.mlx", 1.0, cells)
     with pytest.raises(PermissionError):
         app.doc("../etc/passwd.mlx")
+
+
+def test_outputs_survive_unrelated_edits():
+    from mlxkit.server import carry_outputs
+    from mlxkit.outputs import parse_output_xml
+
+    pkg, doc = load()
+    text = to_text(doc).replace("lr = 1420; % m", "lr = 1420; % m\nwheelbase = lf + lr;")
+    new = from_text(text, doc)
+    outs = parse_output_xml(carry_outputs(pkg.output_xml, doc, new))
+    # All five outputs belong to statements that didn't change; they shift by one region.
+    assert [o.kind for o in outs] == ["figure", "figure", "figure", "text", "text"]
+    assert outs[3].regions == [66]
+    # Editing a plotting statement drops only the figure it fed.
+    text2 = to_text(doc).replace("title('Path'", "title('Path'")
+    outs2 = parse_output_xml(carry_outputs(pkg.output_xml, doc, from_text(text2, doc)))
+    assert [o.kind for o in outs2] == ["figure", "figure", "text", "text"]
+
+
+def test_merge_outputs_replaces_only_what_ran():
+    from mlxkit.server import merge_outputs
+
+    old = [Output("text", [1], text="a"), Output("figure", [2, 3], png=b"old", extra={"id": "F"}),
+           Output("text", [5], text="b")]
+    new = [Output("figure", [3], png=b"new", extra={"handle": 1}), Output("text", [3], text="c")]
+    merged = merge_outputs(old, new, {3}, {1: "F"})
+    assert [(o.kind, o.regions) for o in merged] == [("text", [1]), ("figure", [2, 3]), ("text", [3]), ("text", [5])]
+    assert merged[1].png == b"new" and merged[1].extra["id"] == "F"
+
+
+def test_select_regions_by_section():
+    from mlxkit.runner import parse_script
+    from mlxkit.server import select_regions
+
+    _, doc = load()
+    _, regions, _ = parse_script(doc)
+    first_code = next(i for i, b in enumerate(doc.blocks) if b.kind == "code")
+    assert select_regions(doc, regions, "section", first_code) == [0, 1]
+    upto = select_regions(doc, regions, "upto", first_code)
+    assert upto == [0, 1]
+    assert len(select_regions(doc, regions, "all", None)) == 68
+
+
+@pytest.mark.skipif(shutil.which("octave") is None, reason="GNU Octave not installed")
+def test_session_keeps_workspace_and_survives_interrupt(tmp_path):
+    import threading
+    from mlxkit.regions import split_regions
+    from mlxkit.session import Session
+
+    script = tmp_path / "s.mlx"
+    shutil.copy(FIXTURE, script)
+    lines = ["a = 20;", "b = a + 22", "k = 0; while true, k = k + 1; end", "c = b * 2"]
+    regions = split_regions(lines)
+    sess = Session(script)
+    sess.start()
+    try:
+        r = sess.execute(lines, regions, [0], set())
+        r = sess.execute(lines, regions, [1], set())  # uses `a` from the earlier request
+        assert [(o.kind, o.text) for o in r.outputs] == [("variable", "42")]
+        cancel = threading.Event()
+        threading.Timer(1.0, cancel.set).start()
+        r = sess.execute(lines, regions, [2], set(), cancel=cancel)
+        assert r.cancelled and sess.alive
+        r = sess.execute(lines, regions, [3], set())
+        assert [(o.kind, o.text) for o in r.outputs] == [("variable", "84")]
+        assert {"a", "b", "c", "k"} <= {v["name"] for v in r.variables}
+    finally:
+        sess.close()

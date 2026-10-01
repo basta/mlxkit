@@ -57,17 +57,15 @@ def cmd_build(args) -> int:
     doc = from_text(src.read_text(), base)
     code_changed = [b.code for b in doc.code_blocks] != [b.code for b in base.code_blocks]
     pkg.document_xml = doc.to_xml()
-    if code_changed and pkg.output_xml is not None:
-        # Saved outputs no longer match the code; drop them until the next `mlx run`.
-        from .outputs import build_output_xml, code_line_numbers
-        from .regions import split_regions
+    if pkg.output_xml is not None:
+        # Outputs of statements you didn't change stay; the rest need `mlx run`.
+        from .server import carry_outputs
 
-        sections = {b.first_line for b in doc.blocks if b.kind == "sectionbreak"}
-        pkg.output_xml = build_output_xml(split_regions(doc.lines(), sections), [], code_line_numbers(doc.lines()))
+        pkg.output_xml = carry_outputs(pkg.output_xml, base, doc)
     if out == base_path:
         _backup(out)
     pkg.write(out)
-    note = " (code changed: old outputs cleared, run `mlx run` to regenerate)" if code_changed else ""
+    note = " (code changed: outputs of edited statements removed; `mlx run` regenerates them)" if code_changed else ""
     print(f"wrote {out}{note}")
     return 0
 

@@ -34,6 +34,7 @@ class Output:
     columns: int = 1
     var_type: str = "double"
     extra: dict = field(default_factory=dict)
+    raw: str | None = None  # outputData XML kept verbatim (outputs read back from a file)
 
 
 def _tag(name: str, value) -> str:
@@ -51,6 +52,8 @@ _TRUNC = ("<truncationInfo><wasTruncatedAtLineBreak>false</wasTruncatedAtLineBre
 
 
 def _output_data(o: Output) -> str:
+    if o.raw is not None:
+        return o.raw
     if o.kind == "figure":
         uri = "data:image/png;base64," + base64.b64encode(o.png or b"").decode()
         return (_tag("figureId", o.extra.get("id") or uuid.uuid4()) + _tag("figureUri", uri)
@@ -110,3 +113,67 @@ def code_line_numbers(lines: list[str | None]) -> dict[int, int]:
             k += 1
             out[i] = k
     return out
+
+
+# --- reading outputs back, and keeping them across edits --------------------------
+
+def parse_output_xml(xml: bytes | None) -> list[Output]:
+    """Outputs saved in output.xml, with the region numbers they belong to.
+
+    Figures are decoded (their region lists live inside outputData); every
+    other output keeps its outputData verbatim.
+    """
+    import xml.etree.ElementTree as ET
+
+    if not xml:
+        return []
+    root = ET.fromstring(xml)
+    owners: dict[int, list[int]] = {}
+    ra = root.find("regionArray")
+    for e in (ra if ra is not None else []):
+        num = int(e.find("code/regionNumber").text)
+        for i in e.find("outputIndexes"):
+            owners.setdefault(int(i.text), []).append(num)
+    result = []
+    oa = root.find("outputArray")
+    for idx, e in enumerate(oa if oa is not None else []):
+        kind = e.find("type").text
+        data = e.find("outputData")
+        if data is None:
+            continue
+        if kind == "figure":
+            uri = data.findtext("figureUri") or ""
+            png = base64.b64decode(uri.split(",", 1)[1]) if "," in uri else b""
+            size = tuple(int(x.text) for x in data.find("figureSize")) if data.find("figureSize") is not None else (560, 420)
+            regs = [int(x.text) for x in data.find("regionNumbers")] if data.find("regionNumbers") is not None else []
+            result.append(Output("figure", regs or owners.get(idx, []), png=png, size=size,
+                                 extra={"id": data.findtext("figureId")}))
+        else:
+            inner = "".join(ET.tostring(c, encoding="unicode") for c in data)
+            result.append(Output(kind, owners.get(idx, []), raw=inner))
+    return result
+
+
+def region_signatures(lines: list[str | None], regions: list[Region]) -> list[str]:
+    return ["\n".join(t or "" for t in lines[r.start_line:r.end_line + 1]).strip() for r in regions]
+
+
+def remap_outputs(outputs: list[Output], old_lines, old_regions, new_lines, new_regions) -> list[Output]:
+    """Carry outputs over to an edited document: an output survives if the
+    statements that produced it are unchanged (matched by their code)."""
+    import difflib
+
+    old_sig, new_sig = region_signatures(old_lines, old_regions), region_signatures(new_lines, new_regions)
+    mapping: dict[int, int] = {}
+    sm = difflib.SequenceMatcher(None, old_sig, new_sig, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for k in range(i2 - i1):
+                mapping[i1 + k] = j1 + k
+    kept = []
+    for o in outputs:
+        if not o.regions or any(r not in mapping for r in o.regions):
+            continue  # some statement behind it changed: the output is stale
+        o.regions = [mapping[r] for r in o.regions]
+        kept.append(o)
+    return kept
