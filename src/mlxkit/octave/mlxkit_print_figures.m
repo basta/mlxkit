@@ -60,6 +60,11 @@ function s = convert(s)
   s = regexprep(s, '\\rm\s*', '\\rm ');
   s = regexprep(s, '\\mathrm\{([^}]*)\}', '{\\rm $1}');
   s = regexprep(s, '\\(left|right)', '');
+  % Function names and \frac aren't in Octave's TeX subset: write them out.
+  s = regexprep(s, '\\(arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|cot|sec|csc|log|ln|exp|max|min|det|lim|sup|inf|deg)(?![A-Za-z])', '{\\rm $1}');
+  s = regexprep(s, '\\[dt]?frac\{(\w+)\}\{(\w+)\}', '$1/$2');
+  s = regexprep(s, '\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}', '($1)/($2)');
+  s = regexprep(s, '\\(text|textrm|textit|textbf|mathrm|operatorname)\{([^{}]*)\}', '$2');
   s = regexprep(s, '\\(,|;|!)', ' ');
   s = regexprep(s, '\$([^$]*)\$', '{\\it $1}');
   s = strrep(s, '$', '');

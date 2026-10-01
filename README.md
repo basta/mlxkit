@@ -3,7 +3,10 @@
 Edit and run MATLAB live scripts (`.mlx`) without MATLAB, using GNU Octave.
 
 ```
-mlx serve  [folder]          # notebook editor in the browser: edit, run, see outputs inline
+mlx kernel install           # Jupyter kernel "MATLAB (Octave · mlxkit)" for JupyterLab / VS Code
+mlx notebook script.mlx      # -> script.ipynb (text, code, images, equations, saved outputs)
+mlx build  script.ipynb      # notebook (with its outputs) back into script.mlx
+mlx serve  [folder]          # minimal built-in notebook editor in the browser
 mlx edit   script.mlx        # -> script.live.m, a plain-text version you can edit anywhere
 mlx build  script.live.m     # apply your edits back into script.mlx
 mlx run    script.mlx        # run it in Octave; figures and output are embedded in the .mlx
@@ -13,7 +16,30 @@ mlx show   script.mlx        # print the plain-text version
 
 `build` and `run` overwrite the `.mlx` in place and keep the previous version as `script.mlx.bak`.
 
-## The editor
+## Jupyter (recommended)
+
+```
+pip install './mlxkit[jupyter]'   # or: uv tool install './mlxkit[jupyter]'
+mlx kernel install
+mlx notebook Assignment.mlx       # open Assignment.ipynb in JupyterLab or VS Code
+mlx build Assignment.ipynb        # when done: back into Assignment.mlx, outputs included
+```
+
+The kernel runs every cell in one persistent Octave session with all of
+mlxkit's compatibility handling. Interrupt stops Octave but keeps the
+workspace; restarting the kernel clears it. Tab completion and `?`/Shift+Tab
+help work. Text output streams while a cell runs.
+
+The notebook keeps what it needs to rebuild the `.mlx` exactly: paragraphs you
+don't edit come back byte-for-byte (all 132 corpus files round-trip unchanged),
+images travel as cell attachments, and outputs from the mlxkit kernel are tagged
+with the statement that produced them, so `mlx build` puts every figure and
+value on the same line as a native `mlx run` would. Local functions, which a
+live script keeps at the end, sit in the first cell of the notebook so it runs
+top to bottom; `mlx build` moves them back. A Markdown cell containing only
+`---` is a section break.
+
+## The built-in editor
 
 `mlx serve` opens `http://127.0.0.1:8765` (or the next free port) with every
 `.mlx` under the folder in a sidebar. Click a paragraph to edit it as Markdown;

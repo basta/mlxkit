@@ -90,11 +90,15 @@ class Workspace:
                 "warning('off', 'Octave:latex-markup-not-supported-for-tick-marks'); "
                 "warning('off', 'Octave:LaTeX:internal-error'); ")
 
-    def write_functions(self, lines, regions, handles) -> set[str]:
-        """(Re)write local function files; returns names that changed or disappeared."""
+    def write_functions(self, lines, regions, handles, replace_all: bool = True) -> set[str]:
+        """(Re)write local function files; returns names that changed or disappeared.
+
+        replace_all: the code holds every local function (a whole script), so
+        files for functions it no longer defines are removed.
+        """
         funcs = {name: transform(src, handles) for name, src in split_local_functions(lines, regions).items()}
         changed = set()
-        for f in self.functions.glob("*.m"):
+        for f in self.functions.glob("*.m") if replace_all else ():
             if f.stem not in funcs:
                 f.unlink()
                 changed.add(f.stem)

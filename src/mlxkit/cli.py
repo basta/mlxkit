@@ -6,6 +6,9 @@
   mlx html   script.mlx            render script + outputs to script.html for viewing
   mlx show   script.mlx            print the plain-text version to the terminal
   mlx serve  [folder|file.mlx]     open a notebook editor in the browser
+  mlx kernel install               add the "MATLAB (Octave · mlxkit)" kernel to Jupyter / VS Code
+  mlx notebook script.mlx          -> script.ipynb (open in JupyterLab or VS Code with that kernel)
+  mlx build  script.ipynb          write the notebook (text, code, outputs) back into script.mlx
 """
 from __future__ import annotations
 
@@ -46,10 +49,40 @@ def cmd_edit(args) -> int:
     return 0
 
 
+def cmd_notebook(args) -> int:
+    try:
+        import nbformat
+
+        from .notebook import to_notebook
+    except ImportError:
+        print("Notebooks need extra packages: pip install 'mlxkit[jupyter]'", file=sys.stderr)
+        return 1
+    src = Path(args.file)
+    dst = Path(args.output) if args.output else src.with_suffix(".ipynb")
+    if dst.exists() and not args.force:
+        print(f"{dst} already exists (use --force to overwrite it)", file=sys.stderr)
+        return 1
+    nbformat.write(to_notebook(src), dst)
+    print(f"wrote {dst}\nopen it with the \"MATLAB (Octave · mlxkit)\" kernel; when done: mlx build {dst}")
+    return 0
+
+
 def cmd_build(args) -> int:
     from .livetext import from_text
 
     src = Path(args.file)
+    if src.suffix.lower() == ".ipynb":
+        import nbformat
+
+        from .notebook import from_notebook
+
+        base_path = Path(args.base) if args.base else src.with_suffix(".mlx")
+        out = Path(args.output) if args.output else base_path
+        if out == base_path:
+            _backup(out)
+        n = from_notebook(nbformat.read(src, as_version=4), base_path, out)
+        print(f"wrote {out} ({n} output{'s' if n != 1 else ''} from the notebook)")
+        return 0
     base_path = Path(args.base) if args.base else _mlx_path(src)
     out = Path(args.output) if args.output else base_path
     pkg = MlxPackage.read(base_path)
@@ -127,6 +160,22 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_kernel(args) -> int:
+    try:
+        from .kernel import install, uninstall
+    except ImportError:
+        print("The Jupyter kernel needs extra packages: pip install 'mlxkit[jupyter]'", file=sys.stderr)
+        return 1
+    if args.action == "install":
+        where = install(user=not args.sys_prefix, prefix=sys.prefix if args.sys_prefix else None)
+        print(f"installed the mlxkit kernel in {where}\n"
+              "In JupyterLab or VS Code, choose the kernel \"MATLAB (Octave · mlxkit)\".")
+    else:
+        uninstall()
+        print("removed the mlxkit kernel")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mlx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
@@ -137,7 +186,13 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("-f", "--force", action="store_true", help="overwrite an existing .live.m")
     e.set_defaults(func=cmd_edit)
 
-    b = sub.add_parser("build", help="apply an edited .live.m back into its .mlx")
+    n = sub.add_parser("notebook", help="convert a .mlx to a Jupyter notebook")
+    n.add_argument("file")
+    n.add_argument("-o", "--output")
+    n.add_argument("-f", "--force", action="store_true", help="overwrite an existing .ipynb")
+    n.set_defaults(func=cmd_notebook)
+
+    b = sub.add_parser("build", help="apply an edited .live.m or .ipynb back into its .mlx")
     b.add_argument("file")
     b.add_argument("--base", help="the original .mlx (default: next to the .live.m)")
     b.add_argument("-o", "--output", help="output .mlx (default: overwrite the base, keeping a .bak)")
@@ -167,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--octave", default="octave", help="Octave executable")
     v.add_argument("--no-browser", action="store_true", help="don't open a browser window")
     v.set_defaults(func=cmd_serve)
+
+    k = sub.add_parser("kernel", help="install or remove the Jupyter kernel")
+    k.add_argument("action", choices=["install", "remove"])
+    k.add_argument("--sys-prefix", action="store_true", help="install into this Python environment instead of for the user")
+    k.set_defaults(func=cmd_kernel)
 
     args = p.parse_args(argv)
     return args.func(args)

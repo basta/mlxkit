@@ -177,3 +177,24 @@ def remap_outputs(outputs: list[Output], old_lines, old_regions, new_lines, new_
         o.regions = [mapping[r] for r in o.regions]
         kept.append(o)
     return kept
+
+
+def output_text(o: Output) -> str:
+    """How an output reads in MATLAB's command window (for notebooks and terminals)."""
+    import html
+    import re
+    import xml.etree.ElementTree as ET
+
+    kind, name, text, header = o.kind, o.name, o.text, o.header
+    if o.raw is not None:
+        data = ET.fromstring(f"<d>{o.raw}</d>")
+        name = data.findtext("name") or ""
+        text = data.findtext("text") or data.findtext("value") or ""
+        header = re.sub(r"<[^>]+>", "", html.unescape(data.findtext("header") or ""))
+    text = re.sub(r"</?strong>", "", text)  # MATLAB marks table headers with <strong>
+    if kind in ("variable",):
+        return f"{name} = {text}\n"
+    if kind in ("matrix", "variableString", "symbolic"):
+        head = f"  {header}\n\n" if header else "\n"
+        return f"{name} =\n{head}{text.rstrip()}\n" if name else text
+    return text if text.endswith("\n") else text + "\n"

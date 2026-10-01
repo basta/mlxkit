@@ -61,7 +61,8 @@ class Session:
         self.proc = subprocess.Popen(
             [self.octave, "--no-gui", "--quiet", "--norc", "--no-history", "--interactive"],
             cwd=self.ws.work, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, env=_octave_env())
+            text=True, bufsize=1, env=_octave_env(),
+            start_new_session=True)  # own process group: Ctrl+C / Jupyter interrupts reach Octave only through us
         threading.Thread(target=self._read, daemon=True).start()
         self._request("PS1(''); PS2(''); " + self.ws.setup_commands(), timeout=120)
 
@@ -120,7 +121,15 @@ class Session:
         self.proc.stdin.write(f"disp('MLXKIT_DONE {token}')\n")
         self.proc.stdin.flush()
         start, interrupted = time.monotonic(), False
-        while not done.wait(0.2):
+        while True:
+            try:
+                if done.wait(0.2):
+                    break
+            except KeyboardInterrupt:  # e.g. Jupyter's interrupt reaching this thread
+                if not interrupted:
+                    self.interrupt()
+                    interrupted = True
+                continue
             if on_tick:
                 on_tick()
             if not self.alive:
@@ -137,21 +146,43 @@ class Session:
     # --- running code ---------------------------------------------------------
 
     def execute(self, lines: list[str | None], regions: list[Region], numbers: list[int], handles: set[str],
-                progress=lambda done, total: None, cancel: threading.Event | None = None) -> ExecResult:
-        """Run the given regions (in order) in the session's workspace."""
+                progress=lambda done, total: None, cancel: threading.Event | None = None,
+                on_output=None, whole_script: bool = True) -> ExecResult:
+        """Run the given regions (in order) in the session's workspace.
+
+        on_output(Output) is called as soon as each statement's printed output
+        is available (figures come at the end). whole_script=False means the
+        code is a fragment (a notebook cell): local functions it doesn't define
+        are kept.
+        """
         with self.lock:
             self.busy = True
             try:
-                return self._execute(lines, regions, numbers, handles, progress, cancel)
+                return self._execute(lines, regions, numbers, handles, progress, cancel, on_output, whole_script)
             finally:
                 self.busy = False
 
-    def _execute(self, lines, regions, numbers, handles, progress, cancel) -> ExecResult:
+    def evaluate(self, code: str, timeout: float = 30) -> str:
+        """Run a short command in the workspace and return what it printed (for help/completion)."""
+        with self.lock:
+            if not self.alive:
+                self.close()
+                self.start()
+            out = self.ws.new_outdir()
+            (out / "code.m").write_text(code)
+            try:
+                self._request(f"mlxkit_capture('{_q(out)}');", timeout=timeout)
+            except Cancelled:
+                return ""
+            f = out / "result.txt"
+            return f.read_text(errors="replace") if f.exists() else ""
+
+    def _execute(self, lines, regions, numbers, handles, progress, cancel, on_output, whole_script) -> ExecResult:
         if not self.alive:
             self.close()
             self.start()
         ws = self.ws
-        changed = ws.write_functions(lines, regions, handles)
+        changed = ws.write_functions(lines, regions, handles, replace_all=whole_script)
         to_run = [regions[n] for n in numbers if not regions[n].is_function]
         out = ws.new_outdir()
         ws.write_code(out, lines, to_run, handles)
@@ -159,8 +190,24 @@ class Session:
         clear = f"clear {' '.join(sorted(changed))}; rehash(); " if changed else ""
         total = len(to_run)
 
+        emitted: set[int] = set()
+
+        def stream():
+            # Statements finish in order; pass on the output of each one that's done.
+            for r in to_run:
+                if r.number in emitted:
+                    continue
+                if not (out / f"{r.number}.figs").exists():
+                    break
+                emitted.add(r.number)
+                if on_output:
+                    for o in collect([r], out)[0]:
+                        if o.kind != "figure":
+                            on_output(o)
+
         def tick():
             progress(sum(1 for _ in out.glob("*.figs")), total)
+            stream()
 
         cancelled = False
         try:
@@ -172,8 +219,13 @@ class Session:
             self._request(f"mlxkit_print_figures('{_q(out)}', [{' '.join(handles_touched)}]); "
                           f"mlxkit_who('{_q(out / 'workspace.tsv')}');", timeout=60)
         progress(total, total)
+        stream()
 
         outputs, error = collect(to_run, out)
+        if on_output:
+            for o in outputs:
+                if o.kind == "figure" or o.regions[0] not in emitted:
+                    on_output(o)
         executed = [r.number for r in to_run if (out / f"{r.number}.figs").exists()]
         for n in executed:
             self.ran.add(_signature(lines, regions[n]))

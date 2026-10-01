@@ -281,3 +281,76 @@ def test_session_keeps_workspace_and_survives_interrupt(tmp_path):
         assert {"a", "b", "c", "k"} <= {v["name"] for v in r.variables}
     finally:
         sess.close()
+
+
+def test_notebook_roundtrip(tmp_path):
+    nbformat = pytest.importorskip("nbformat")
+    from mlxkit.notebook import from_notebook, to_notebook
+    from mlxkit.outputs import parse_output_xml
+
+    nb = nbformat.reads(nbformat.writes(to_notebook(FIXTURE)), as_version=4)
+    nbformat.validate(nb)
+    # Local functions come first so the notebook runs top to bottom.
+    assert nb.cells[1].cell_type == "code" and nb.cells[1].source.startswith("function beta")
+    md = "\n".join(c.source for c in nb.cells if c.cell_type == "markdown")
+    assert "$l_{\\rm f}$" in md and "attachment:rId1.png" in md  # plain TeX, image attached
+    out = tmp_path / "back.mlx"
+    from_notebook(nb, FIXTURE, out)
+    pkg, back = MlxPackage.read(FIXTURE), MlxPackage.read(out)
+    assert back.document_xml == pkg.document_xml
+    assert [(o.kind, o.regions) for o in parse_output_xml(back.output_xml)] == \
+        [(o.kind, o.regions) for o in parse_output_xml(pkg.output_xml)]
+
+
+def test_notebook_edits_flow_back(tmp_path):
+    nbformat = pytest.importorskip("nbformat")
+    from mlxkit.notebook import from_notebook, to_notebook
+
+    nb = to_notebook(FIXTURE)
+    fn = nb.cells[1]
+    fn.source = fn.source.replace("beta = 0; % todo", "beta = atan(lr*tan(df)/(lf + lr));")
+    intro = next(c for c in nb.cells if c.cell_type == "markdown" and "## Introduction" in c.source)
+    intro.source = intro.source.replace("## Introduction", "## Introduction (edited) with $\\alpha^2$")
+    out = tmp_path / "edited.mlx"
+    from_notebook(nb, FIXTURE, out)
+    doc = Document(MlxPackage.read(out).document_xml)
+    assert "beta = atan(lr*tan(df)/(lf + lr));" in doc.script()
+    # Functions are back at the end of the script, after the test code.
+    assert doc.script().index("run_tests(") < doc.script().index("function beta")
+    heading = next(b for b in doc.blocks if "edited" in b.raw)
+    assert heading.style == "heading" and "\\alpha^2" in heading.raw
+
+
+@pytest.mark.skipif(shutil.which("octave") is None, reason="GNU Octave not installed")
+def test_kernel_over_jupyter_protocol(tmp_path, monkeypatch):
+    pytest.importorskip("ipykernel")
+    from jupyter_client.manager import start_new_kernel
+    from mlxkit.kernel import install
+
+    prefix = tmp_path / "jupyter"
+    install(user=False, prefix=str(prefix))
+    monkeypatch.setenv("JUPYTER_PATH", str(prefix / "share" / "jupyter"))
+    monkeypatch.chdir(tmp_path)
+    km, kc = start_new_kernel(kernel_name="mlxkit")
+    try:
+        def run(code):
+            msg_id = kc.execute(code)
+            outs = []
+            while True:
+                m = kc.get_iopub_msg(timeout=60)
+                if m["parent_header"].get("msg_id") != msg_id:
+                    continue
+                if m["msg_type"] == "status" and m["content"]["execution_state"] == "idle":
+                    return outs
+                if m["msg_type"] in ("display_data", "error"):
+                    outs.append(m["content"])
+        assert run("a = 20;")  == []
+        out = run("b = a + 22")
+        assert out[0]["data"]["text/plain"] == "b = 42" and out[0]["metadata"]["mlxkit"]["kind"] == "variable"
+        out = run("plot(1:3)")
+        assert "image/png" in out[0]["data"]
+        out = run("nope + 1")
+        assert out[-1].get("ename") == "OctaveError"
+    finally:
+        kc.stop_channels()
+        km.shutdown_kernel(now=True)

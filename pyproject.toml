@@ -8,12 +8,13 @@ dependencies = ["numpy", "scipy", "mat-io"]
 
 [project.optional-dependencies]
 symbolic = ["sympy"]  # used by Octave's symbolic package for MATLAB `syms` code
+jupyter = ["ipykernel>=6", "jupyter_client>=7", "nbformat>=5"]
 
 [project.scripts]
 mlx = "mlxkit.cli:main"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "jupyterlab"]
 
 [build-system]
 requires = ["hatchling"]
