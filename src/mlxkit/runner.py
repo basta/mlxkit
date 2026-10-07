@@ -199,6 +199,10 @@ def _octave_env() -> dict[str, str]:
     # Octave's symbolic package runs SymPy through $PYTHON; use ours if it has SymPy.
     if "PYTHON" not in env and importlib.util.find_spec("sympy") is not None:
         env["PYTHON"] = sys.executable
+    # Figures are never shown, only printed. Under Wayland, Qt's default platform can't make the
+    # OpenGL context Octave prints hidden figures with, and every PNG comes out black.
+    if sys.platform.startswith("linux"):
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
     return env
 
 

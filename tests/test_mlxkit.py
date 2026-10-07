@@ -10,6 +10,20 @@ from mlxkit.outputs import Output, build_output_xml, code_line_numbers
 from mlxkit.package import MlxPackage
 from mlxkit.regions import split_regions
 
+def png_pixels(png: bytes) -> bytes:
+    """Raw scanline bytes of a PNG (filter bytes included; enough to tell a blank image from a drawn one)."""
+    import struct
+    import zlib
+
+    data, i = b"", 8
+    while i < len(png):
+        n, kind = struct.unpack(">I4s", png[i:i + 8])
+        if kind == b"IDAT":
+            data += png[i + 8:i + 8 + n]
+        i += 12 + n
+    return zlib.decompress(data)
+
+
 # A live script saved by MATLAB, with outputs (BSD-licensed, see fixtures/README.md).
 FIXTURE = Path(__file__).parent / "fixtures" / "OpAmpLabSoln.mlx"
 
@@ -165,7 +179,8 @@ def test_run_in_octave(tmp_path):
     assert struct.header == "struct with fields:" and "a: 1" in struct.text
     assert ("text", "hello\n") in kinds
     assert ("warning", "Warning: careful") in kinds
-    assert any(o.kind == "figure" and o.png.startswith(b"\x89PNG") for o in result.outputs)
+    fig = next(o for o in result.outputs if o.kind == "figure")
+    assert fig.png.startswith(b"\x89PNG") and len(set(png_pixels(fig.png))) > 1  # drawn, not a blank (black) frame
     assert result.error is None
     assert MlxPackage.read(tmp_path / "out.mlx").output_xml
 
@@ -268,6 +283,16 @@ def test_outputs_survive_unrelated_edits():
     text2 = to_text(doc).replace("ylim([-10 10])", "ylim([-5 5])")
     outs2 = parse_output_xml(carry_outputs(pkg.output_xml, doc, from_text(text2, doc)))
     assert [o.kind for o in outs2] == ["variable", "variable", "figure"]
+
+
+def test_fractional_figure_size():
+    from mlxkit.outputs import parse_output_xml
+
+    xml = ('<embeddedOutputs><outputArray type="array"><element><type>figure</type><outputData>'
+           '<figureUri>data:image/png;base64,</figureUri>'
+           '<figureSize type="array"><element>573.539389370524</element><element>420</element></figureSize>'
+           '</outputData></element></outputArray></embeddedOutputs>')
+    assert parse_output_xml(xml)[0].size == (573.539389370524, 420)
 
 
 def test_merge_outputs_replaces_only_what_ran():

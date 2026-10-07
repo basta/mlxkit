@@ -27,7 +27,7 @@ class Output:
     regions: list[int]  # region numbers that produced it (figures: every region that drew on it)
     text: str = ""
     png: bytes | None = None
-    size: tuple[int, int] = (560, 420)
+    size: tuple[float, float] = (560, 420)
     name: str = ""  # variable outputs
     header: str = ""
     rows: int = 1
@@ -39,6 +39,12 @@ class Output:
 
 def _tag(name: str, value) -> str:
     return f"<{name}>{escape(str(value))}</{name}>"
+
+
+def _number(text: str) -> int | float:
+    """MATLAB usually saves whole pixel sizes but can save fractional ones (e.g. 573.539389370524)."""
+    v = float(text)
+    return int(v) if v.is_integer() else v
 
 
 def _array(name: str, values) -> str:
@@ -144,7 +150,7 @@ def parse_output_xml(xml: bytes | None) -> list[Output]:
         if kind == "figure":
             uri = data.findtext("figureUri") or ""
             png = base64.b64decode(uri.split(",", 1)[1]) if "," in uri else b""
-            size = tuple(int(x.text) for x in data.find("figureSize")) if data.find("figureSize") is not None else (560, 420)
+            size = tuple(_number(x.text) for x in data.find("figureSize")) if data.find("figureSize") is not None else (560, 420)
             regs = [int(x.text) for x in data.find("regionNumbers")] if data.find("regionNumbers") is not None else []
             result.append(Output("figure", regs or owners.get(idx, []), png=png, size=size,
                                  extra={"id": data.findtext("figureId")}))
